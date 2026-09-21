@@ -198,3 +198,4 @@
 18. 仓位缩放统一使用 `ROUND_DOWN`；缩放后低于最低开仓权重的 `ENTER` 变为 `BLOCKED/MIN_ENTRY_POSITION_AFTER_SCALING`，总仓位不超过 80%，现金不低于 20%。
 19. 不同 run 但相同正式内容复用同一个内容寻址 SignalBatch、Signal 和 VirtualOrder，同时分别保存 PositionSizingRun 与 PositionTarget 审计记录。
 20. 当前冻结目标 Store 可由 Python 直接使用，但数据库到冻结 Target bundle 的一键导出 CLI 尚未实现，已作为 Phase 5 已知非阻断项记录。
+21. Phase 2 正式快照包含 23 项特征，Jev 只要求其中 20 项；C 组 Gate 必须做必需集合子集检查，并只以必需特征缺值作为 LLM 阻断条件。可选 `gap_fill_pct` 缺失不应拒绝合法输入。

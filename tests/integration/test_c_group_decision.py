@@ -192,6 +192,7 @@ def _snapshot() -> MarketSnapshot:
 
 def _c_features(symbol: str) -> MarketFeatureSnapshot:
     cutoff = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    feature_codes = (*REQUIRED_SYMBOL_FEATURES, "return_1d", "overnight_gap_pct", "gap_fill_pct")
     values = {
         code: FeatureValue(
             feature_code=code,
@@ -208,7 +209,7 @@ def _c_features(symbol: str) -> MarketFeatureSnapshot:
             missing_reason=None,
             source_snapshot_hash="b" * 64,
         )
-        for index, code in enumerate(REQUIRED_SYMBOL_FEATURES, start=1)
+        for index, code in enumerate(feature_codes, start=1)
     }
     draft = MarketFeatureSnapshot(
         symbol=symbol,
@@ -426,6 +427,70 @@ async def test_c_group_evaluates_available_symbols_and_keeps_complete_coverage(
     assert failed.action is DecisionAction.NO_SIGNAL
     assert len(result.sizing_run.targets) == 3
     assert result.stored_batch_id
+
+
+@pytest.mark.asyncio
+async def test_optional_phase2_feature_can_be_missing_without_blocking_llm(
+    session_factory: SessionFactory,
+) -> None:
+    run_id = uuid4()
+    jev = _jev_run(run_id)
+    await _seed_jev(session_factory, jev)
+    provider = FakeDecisionProvider()
+    service = CGroupDecisionService(
+        provider=provider,
+        decision_repository=DecisionEvaluationRepository(session_factory),
+        portfolio_repository=PortfolioRepository(session_factory),
+    )
+    command = _command(run_id, jev)
+    symbol = "600000.SH"
+    feature = command.features[symbol]
+    values = dict(feature.values)
+    values["gap_fill_pct"] = values["gap_fill_pct"].model_copy(
+        update={"value": None, "missing_reason": "NOT_APPLICABLE"}
+    )
+    updated = feature.model_copy(update={"values": values, "content_hash": "0" * 64})
+    updated = updated.model_copy(
+        update={
+            "content_hash": sha256_json(updated.model_copy(update={"content_hash": ""}))
+        }
+    )
+    command = command.model_copy(
+        update={"features": dict(command.features) | {symbol: updated}}
+    )
+    _, symbol_states = build_jev_states(
+        snapshot=command.snapshot,
+        features=command.features,
+        candidate_symbols=command.candidate_symbols,
+        held_only_symbols=("000002.SZ",),
+        candidate_limit=command.candidate_limit,
+    )
+    evaluation = command.jev.symbols[symbol]
+    rebound = evaluation.model_copy(
+        update={
+            "input_hash": JevEvaluationCommand(
+                scope=JevScope.SYMBOL,
+                state=symbol_states[symbol],
+                provider_name=evaluation.provider_name,
+                provider_version=evaluation.provider_version,
+                model_id=evaluation.model_id,
+            ).input_hash
+        }
+    )
+    command = command.model_copy(
+        update={
+            "jev": command.jev.model_copy(
+                update={"symbols": dict(command.jev.symbols) | {symbol: rebound}}
+            )
+        }
+    )
+
+    result = await service.evaluate_run(command)
+
+    assert any(item.decision_input.symbol == symbol for item in provider.commands)
+    assert next(item for item in result.evaluations if item.symbol == symbol).status is (
+        DecisionEvaluationStatus.AVAILABLE
+    )
 
 
 @pytest.mark.asyncio

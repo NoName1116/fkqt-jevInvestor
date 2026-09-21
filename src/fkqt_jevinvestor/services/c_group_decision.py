@@ -224,7 +224,7 @@ class CGroupDecisionService:
             )
             if feature.content_hash != expected_content_hash:
                 raise ValueError("C_GROUP_FEATURE_CONTENT_HASH_MISMATCH")
-            if set(feature.values) != set(REQUIRED_SYMBOL_FEATURES):
+            if not set(REQUIRED_SYMBOL_FEATURES).issubset(feature.values):
                 raise ValueError("C_GROUP_FEATURE_SET_INVALID")
             if any(
                 value.source_snapshot_hash != snapshot.content_hash
@@ -348,8 +348,8 @@ class CGroupDecisionService:
             decision_input.universe_jev.status is not JevEvaluationStatus.AVAILABLE
             or decision_input.symbol_jev.status is not JevEvaluationStatus.AVAILABLE
             or snapshot is None
-            or set(snapshot.values) != set(REQUIRED_SYMBOL_FEATURES)
-            or any(item.value is None for item in snapshot.values.values())
+            or not set(REQUIRED_SYMBOL_FEATURES).issubset(snapshot.values)
+            or any(snapshot.values[code].value is None for code in REQUIRED_SYMBOL_FEATURES)
         )
 
     async def _record_provider_failure(

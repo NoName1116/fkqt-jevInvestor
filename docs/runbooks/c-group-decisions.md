@@ -131,7 +131,7 @@ ORDER BY sizing_run_id, symbol;
 | `C_GROUP_JEV_COVERAGE_INCOMPLETE` | Jev 未覆盖候选与持仓并集 | 完整运行 Jev 阶段 |
 | `C_GROUP_FEATURE_IDENTITY_MISMATCH` | 特征 symbol/date 不一致 | 修复冻结特征 |
 | `C_GROUP_FEATURE_CONTENT_HASH_MISMATCH` | 特征内容与声明 hash 不一致 | 丢弃被修改的特征文件并重新冻结 |
-| `C_GROUP_FEATURE_SET_INVALID` | 特征集合不完整或包含非冻结字段 | 使用 Phase 2 固定特征全集重新冻结 |
+| `C_GROUP_FEATURE_SET_INVALID` | Jev 必需的 20 项特征不完整 | 使用 Phase 2 固定特征全集重新冻结；允许保留 Phase 2 其他确定性特征 |
 | `C_GROUP_FEATURE_SOURCE_MISMATCH` | 特征未绑定本次 MarketSnapshot | 不得混用不同快照的特征 |
 | `C_GROUP_JEV_INPUT_MISMATCH` | Jev input hash 不属于本次冻结 State | 重新运行同一冻结输入的 Jev 阶段 |
 | `C_GROUP_DECISIONS_IN_PROGRESS` | 同一正式键仍由另一个 worker 持有租约 | 等待原运行完成；此时不会保存仓位或信号 |
