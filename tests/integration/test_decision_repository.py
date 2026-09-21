@@ -127,6 +127,11 @@ async def test_claim_success_cache_and_recent_action(session_factory: SessionFac
     )
     cached = await repository.claim(second_run, command)
     history = await repository.recent_actions("paper-main", "600000.SH")
+    historical = await repository.recent_actions(
+        "paper-main",
+        "600000.SH",
+        as_of=command.decision_input.decision_date - timedelta(days=1),
+    )
 
     assert claim.status is ClaimStatus.ACQUIRED
     assert stored.action is DecisionAction.ENTER
@@ -135,10 +140,11 @@ async def test_claim_success_cache_and_recent_action(session_factory: SessionFac
     assert [(item.decision_date, item.action) for item in history] == [
         (command.decision_input.decision_date, DecisionAction.ENTER)
     ]
+    assert historical == ()
 
 
 @pytest.mark.asyncio
-async def test_failed_evaluation_can_be_retried_without_overwriting_attempt(
+async def test_terminal_failure_is_reused_without_overwriting_attempt(
     session_factory: SessionFactory,
 ) -> None:
     repository = DecisionEvaluationRepository(session_factory)
@@ -156,8 +162,9 @@ async def test_failed_evaluation_can_be_retried_without_overwriting_attempt(
     retry = await repository.claim(uuid4(), command)
 
     assert failure.action is DecisionAction.NO_SIGNAL
-    assert retry.status is ClaimStatus.ACQUIRED
-    assert retry.attempt_sequence == 2
+    assert retry.status is ClaimStatus.COMPLETE
+    assert retry.existing_result == failure
+    assert retry.attempt_sequence is None
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -16,9 +17,14 @@ from fkqt_jevinvestor.domain.decision import (
     DecisionMembership,
     PendingOrderSummaryV1,
 )
-from fkqt_jevinvestor.domain.jev_market import JevEvaluationStatus
+from fkqt_jevinvestor.domain.jev_market import (
+    JevEvaluationCommand,
+    JevEvaluationStatus,
+    JevScope,
+)
 from fkqt_jevinvestor.domain.market_features import MarketFeatureSnapshot, MarketSnapshot
 from fkqt_jevinvestor.domain.portfolio import PortfolioState
+from fkqt_jevinvestor.ingestion.canonical import sha256_json
 from fkqt_jevinvestor.persistence.decision_repository import (
     ClaimStatus,
     DecisionClaim,
@@ -31,6 +37,10 @@ from fkqt_jevinvestor.providers.base import (
     ProviderUnavailableError,
 )
 from fkqt_jevinvestor.services.jev_market_service import JevRunEvaluationV1
+from fkqt_jevinvestor.services.jev_state_builder import (
+    REQUIRED_SYMBOL_FEATURES,
+    build_jev_states,
+)
 from fkqt_jevinvestor.services.position_sizing import (
     PositionSizingConfigV1,
     PositionSizingRunV1,
@@ -55,6 +65,12 @@ class CGroupDecisionCommandV1(BaseModel):
     provider_name: str = Field(min_length=1)
     provider_version: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
+    provider_base_url: str = Field(
+        default="https://api.deepseek.com",
+        min_length=1,
+        max_length=512,
+    )
+    reasoning_effort: Literal["low", "high"] = "high"
     sizing_config: PositionSizingConfigV1
 
     @model_validator(mode="after")
@@ -137,12 +153,19 @@ class CGroupDecisionService:
                 provider_name=command.provider_name,
                 provider_version=command.provider_version,
                 model_id=command.model_id,
+                provider_base_url=command.provider_base_url,
+                reasoning_effort=command.reasoning_effort,
             )
             evaluations.append(
                 await self._evaluate_one(command.run_id, evaluation_command)
             )
 
         evaluation_tuple = tuple(evaluations)
+        if any(
+            item.status is DecisionEvaluationStatus.IN_PROGRESS
+            for item in evaluation_tuple
+        ):
+            raise RuntimeError("C_GROUP_DECISIONS_IN_PROGRESS")
         sizing_run = build_position_sizing_run(
             run_id=str(command.run_id),
             decision_date=command.snapshot.decision_date,
@@ -192,6 +215,50 @@ class CGroupDecisionService:
             for symbol, feature in command.features.items()
         ):
             raise ValueError("C_GROUP_FEATURE_IDENTITY_MISMATCH")
+        for symbol in required:
+            feature = command.features.get(symbol)
+            if feature is None:
+                continue
+            expected_content_hash = sha256_json(
+                feature.model_copy(update={"content_hash": ""}).model_dump(mode="json")
+            )
+            if feature.content_hash != expected_content_hash:
+                raise ValueError("C_GROUP_FEATURE_CONTENT_HASH_MISMATCH")
+            if set(feature.values) != set(REQUIRED_SYMBOL_FEATURES):
+                raise ValueError("C_GROUP_FEATURE_SET_INVALID")
+            if any(
+                value.source_snapshot_hash != snapshot.content_hash
+                for value in feature.values.values()
+            ):
+                raise ValueError("C_GROUP_FEATURE_SOURCE_MISMATCH")
+
+        universe_state, symbol_states = build_jev_states(
+            snapshot=snapshot,
+            features=command.features,
+            candidate_symbols=command.candidate_symbols,
+            held_only_symbols=tuple(sorted(required - set(command.candidate_symbols))),
+            candidate_limit=command.candidate_limit,
+        )
+        expected_universe = JevEvaluationCommand(
+            scope=JevScope.UNIVERSE,
+            state=universe_state,
+            provider_name=jev.universe.provider_name,
+            provider_version=jev.universe.provider_version,
+            model_id=jev.universe.model_id,
+        )
+        if jev.universe.input_hash != expected_universe.input_hash:
+            raise ValueError("C_GROUP_JEV_INPUT_MISMATCH")
+        for symbol in required:
+            evaluation = jev.symbols[symbol]
+            expected_symbol = JevEvaluationCommand(
+                scope=JevScope.SYMBOL,
+                state=symbol_states[symbol],
+                provider_name=evaluation.provider_name,
+                provider_version=evaluation.provider_version,
+                model_id=evaluation.model_id,
+            )
+            if evaluation.input_hash != expected_symbol.input_hash:
+                raise ValueError("C_GROUP_JEV_INPUT_MISMATCH")
 
     async def _evaluate_one(
         self,
@@ -263,6 +330,8 @@ class CGroupDecisionService:
             provider_name=command.provider_name,
             provider_version=command.provider_version,
             model_id=command.model_id,
+            provider_base_url=command.provider_base_url,
+            reasoning_effort=command.reasoning_effort,
             prompt_version=command.prompt_version,
             output_schema_version=command.output_schema_version,
             started_at=started_at,
@@ -279,6 +348,7 @@ class CGroupDecisionService:
             decision_input.universe_jev.status is not JevEvaluationStatus.AVAILABLE
             or decision_input.symbol_jev.status is not JevEvaluationStatus.AVAILABLE
             or snapshot is None
+            or set(snapshot.values) != set(REQUIRED_SYMBOL_FEATURES)
             or any(item.value is None for item in snapshot.values.values())
         )
 

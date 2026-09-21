@@ -141,6 +141,9 @@ class PortfolioRepository:
                 .order_by(NavRecord.valuation_date)
             )).all())
 
+        if as_of is not None and nav_dates and nav_dates[-1] > as_of:
+            raise PortfolioTransactionError("PORTFOLIO_HISTORICAL_STATE_UNAVAILABLE")
+
         total_equity = portfolio.cash_balance + sum(
             (item.last_price * item.quantity for item in positions),
             Decimal(0),
@@ -342,6 +345,25 @@ class PortfolioRepository:
                     sort_keys=True,
                     separators=(",", ":"),
                 )
+                decision_portfolio_hash = hashlib.sha256(
+                    decision_payload.encode("utf-8")
+                ).hexdigest()
+                existing_batch = await session.get(SignalBatchRecord, batch_id)
+                if existing_batch is not None:
+                    if existing_batch.input_hash != batch.input_hash:
+                        raise PortfolioTransactionError(
+                            "C_GROUP_SIGNAL_CONTENT_CONFLICT"
+                        )
+                    self._add_c_group_sizing_records(
+                        session=session,
+                        sizing_run=sizing_run,
+                        sizing_config=sizing_config,
+                        decision_portfolio_hash=decision_portfolio_hash,
+                        batch_id=batch_id,
+                        now=now,
+                    )
+                    await session.flush()
+                    return await self._stored_batch(session, existing_batch)
                 market_value = sum(
                     (
                         item.last_price * item.quantity
@@ -369,9 +391,7 @@ class PortfolioRepository:
                             ),
                             Decimal(0),
                         ),
-                        content_hash=hashlib.sha256(
-                            decision_payload.encode("utf-8")
-                        ).hexdigest(),
+                        content_hash=decision_portfolio_hash,
                         details_json=decision_details,
                     )
                 )
@@ -412,48 +432,14 @@ class PortfolioRepository:
                 for order in stored_orders:
                     session.add(_order_record(order, sizing_run.portfolio_id, now))
 
-                sizing_run_id = _stable_id("sizing", sizing_run.run_id)
-                session.add(
-                    PositionSizingRunRecord(
-                        id=sizing_run_id,
-                        run_id=sizing_run.run_id,
-                        portfolio_id=sizing_run.portfolio_id,
-                        portfolio_version=sizing_run.portfolio_version,
-                        decision_date=sizing_run.decision_date,
-                        planned_execution_date=sizing_run.planned_execution_date,
-                        sizing_version=sizing_run.sizing_version,
-                        config_json=sizing_config.model_dump(mode="json"),
-                        config_hash=sizing_run.config_hash,
-                        input_hash=sizing_run.input_hash,
-                        decision_portfolio_hash=hashlib.sha256(
-                            decision_payload.encode("utf-8")
-                        ).hexdigest(),
-                        target_batch_hash=sizing_run.target_batch_hash,
-                        gross_target_pct=sizing_run.gross_target_pct,
-                        cash_target_pct=sizing_run.cash_target_pct,
-                        run_code=sizing_run.run_code,
-                        signal_batch_id=batch_id,
-                        created_at=now,
-                    )
+                self._add_c_group_sizing_records(
+                    session=session,
+                    sizing_run=sizing_run,
+                    sizing_config=sizing_config,
+                    decision_portfolio_hash=decision_portfolio_hash,
+                    batch_id=batch_id,
+                    now=now,
                 )
-                for target in sizing_run.targets:
-                    session.add(
-                        PositionTargetRecord(
-                            id=_stable_id(
-                                "sizing-target", f"{sizing_run_id}:{target.symbol}"
-                            ),
-                            sizing_run_id=sizing_run_id,
-                            decision_evaluation_id=target.decision_evaluation_id,
-                            symbol=target.symbol,
-                            requested_action=target.requested_action.value,
-                            sizing_status=target.status.value,
-                            current_position_pct=target.current_position_pct,
-                            raw_target_position_pct=target.raw_target_position_pct,
-                            target_position_pct=target.target_position_pct,
-                            signal_action=target.signal_action.value,
-                            block_code=target.block_code,
-                        )
-                    )
                 await session.flush()
                 return StoredSignalBatch(
                     batch_id=batch_id,
@@ -462,6 +448,57 @@ class PortfolioRepository:
                 )
         except IntegrityError as exc:
             raise PortfolioTransactionError("C_GROUP_ATOMIC_WRITE_FAILED") from exc
+
+    @staticmethod
+    def _add_c_group_sizing_records(
+        *,
+        session: AsyncSession,
+        sizing_run: PositionSizingRunV1,
+        sizing_config: PositionSizingConfigV1,
+        decision_portfolio_hash: str,
+        batch_id: str,
+        now: datetime,
+    ) -> None:
+        sizing_run_id = _stable_id("sizing", sizing_run.run_id)
+        session.add(
+            PositionSizingRunRecord(
+                id=sizing_run_id,
+                run_id=sizing_run.run_id,
+                portfolio_id=sizing_run.portfolio_id,
+                portfolio_version=sizing_run.portfolio_version,
+                decision_date=sizing_run.decision_date,
+                planned_execution_date=sizing_run.planned_execution_date,
+                sizing_version=sizing_run.sizing_version,
+                config_json=sizing_config.model_dump(mode="json"),
+                config_hash=sizing_run.config_hash,
+                input_hash=sizing_run.input_hash,
+                decision_portfolio_hash=decision_portfolio_hash,
+                target_batch_hash=sizing_run.target_batch_hash,
+                gross_target_pct=sizing_run.gross_target_pct,
+                cash_target_pct=sizing_run.cash_target_pct,
+                run_code=sizing_run.run_code,
+                signal_batch_id=batch_id,
+                created_at=now,
+            )
+        )
+        for target in sizing_run.targets:
+            session.add(
+                PositionTargetRecord(
+                    id=_stable_id(
+                        "sizing-target", f"{sizing_run_id}:{target.symbol}"
+                    ),
+                    sizing_run_id=sizing_run_id,
+                    decision_evaluation_id=target.decision_evaluation_id,
+                    symbol=target.symbol,
+                    requested_action=target.requested_action.value,
+                    sizing_status=target.status.value,
+                    current_position_pct=target.current_position_pct,
+                    raw_target_position_pct=target.raw_target_position_pct,
+                    target_position_pct=target.target_position_pct,
+                    signal_action=target.signal_action.value,
+                    block_code=target.block_code,
+                )
+            )
 
     async def find_signal_batch(self, batch: FixtureSignalBatch) -> StoredSignalBatch | None:
         async with self._session_factory() as session:

@@ -229,6 +229,37 @@ def test_input_order_does_not_change_targets_or_hashes() -> None:
     assert left.target_batch_hash == right.target_batch_hash
 
 
+def test_scaling_rounds_down_without_exceeding_gross_or_cash_limits() -> None:
+    evaluations = tuple(
+        _evaluation(f"{index:06d}.SZ", DecisionAction.ENTER)
+        for index in range(1, 22)
+    )
+    features = {item.symbol: _features(item.symbol) for item in evaluations}
+
+    run = _run(evaluations, features)
+
+    assert run.gross_target_pct <= Decimal("0.80000000")
+    assert run.cash_target_pct >= Decimal("0.20000000")
+
+
+def test_scaled_entry_below_minimum_is_blocked_instead_of_opened() -> None:
+    portfolio = _portfolio(_position("000001.SZ", "0.79500000"))
+    evaluations = (
+        _evaluation("000001.SZ", DecisionAction.NO_SIGNAL),
+        _evaluation("000002.SZ", DecisionAction.ENTER),
+    )
+    features = {item.symbol: _features(item.symbol) for item in evaluations}
+
+    run = _run(evaluations, features, portfolio)
+    entry = next(item for item in run.targets if item.symbol == "000002.SZ")
+
+    assert entry.status is SizingStatus.BLOCKED
+    assert entry.block_code == "MIN_ENTRY_POSITION_AFTER_SCALING"
+    assert entry.target_position_pct == Decimal(0)
+    assert entry.signal_action is SignalAction.AVOID
+    assert run.gross_target_pct == Decimal("0.79500000")
+
+
 def test_formal_signal_adapter_uses_zero_confidence_sentinel() -> None:
     evaluations = (_evaluation("000001.SZ", DecisionAction.ENTER),)
     run = _run(evaluations, {"000001.SZ": _features("000001.SZ")})

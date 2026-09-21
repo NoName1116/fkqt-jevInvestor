@@ -41,6 +41,8 @@ def upgrade() -> None:
         sa.Column("provider_name", sa.String(64), nullable=False),
         sa.Column("provider_version", sa.String(128), nullable=False),
         sa.Column("model_id", sa.String(128), nullable=False),
+        sa.Column("provider_base_url", sa.String(512), nullable=False),
+        sa.Column("reasoning_effort", sa.String(16), nullable=False),
         sa.Column("prompt_version", sa.String(64), nullable=False),
         sa.Column("output_schema_version", sa.String(64), nullable=False),
         sa.Column("status", sa.String(32), nullable=False),

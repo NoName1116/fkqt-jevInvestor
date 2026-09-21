@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import date
-from decimal import ROUND_HALF_UP, Context, Decimal, localcontext
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Context, Decimal, localcontext
 from enum import StrEnum
 from typing import TypedDict
 
@@ -121,7 +121,13 @@ class _SizingDraft(TypedDict):
 
 
 def _quantize(value: Decimal, quantum: Decimal = _WEIGHT_QUANTUM) -> Decimal:
-    return value.quantize(quantum, rounding=ROUND_HALF_UP)
+    with localcontext(_DECIMAL_CONTEXT):
+        return value.quantize(quantum, rounding=ROUND_HALF_UP)
+
+
+def _quantize_down(value: Decimal, quantum: Decimal) -> Decimal:
+    with localcontext(_DECIMAL_CONTEXT):
+        return value.quantize(quantum, rounding=ROUND_DOWN)
 
 
 def size_one(
@@ -272,10 +278,17 @@ def build_position_sizing_run(
             if desired > available and desired > 0:
                 scale = available / desired
                 for item in scalable:
-                    item["target"] = _quantize(
+                    item["target"] = _quantize_down(
                         item["target"] * scale,
                         config.weight_quantum,
                     )
+                    if (
+                        item["evaluation"].action is DecisionAction.ENTER
+                        and item["target"] < config.min_entry_position_pct
+                    ):
+                        item["target"] = Decimal(0)
+                        item["status"] = SizingStatus.BLOCKED
+                        item["block_code"] = "MIN_ENTRY_POSITION_AFTER_SCALING"
 
     targets: list[SizedTargetV1] = []
     for item in drafts:
@@ -306,11 +319,12 @@ def build_position_sizing_run(
             )
         )
     target_tuple = tuple(targets)
-    gross = _quantize(
-        sum((item.target_position_pct for item in target_tuple), Decimal(0)),
-        config.weight_quantum,
-    )
-    cash = _quantize(Decimal(1) - gross, config.weight_quantum)
+    with localcontext(_DECIMAL_CONTEXT):
+        gross = _quantize(
+            sum((item.target_position_pct for item in target_tuple), Decimal(0)),
+            config.weight_quantum,
+        )
+        cash = _quantize(Decimal(1) - gross, config.weight_quantum)
     input_hash = sha256_json(
         {
             "portfolio": portfolio.model_dump(mode="json"),

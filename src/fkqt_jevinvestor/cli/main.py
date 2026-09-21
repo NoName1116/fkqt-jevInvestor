@@ -167,6 +167,7 @@ async def _run_c_group(args: argparse.Namespace, settings: Settings) -> int:
             symbol: await decision_repository.recent_actions(
                 args.portfolio_id,
                 symbol,
+                as_of=args.decision_date,
             )
             for symbol in required_symbols
         }
@@ -205,6 +206,8 @@ async def _run_c_group(args: argparse.Namespace, settings: Settings) -> int:
                 provider_name="deepseek",
                 provider_version=decision_provider_version,
                 model_id=settings.deepseek_model,
+                provider_base_url=settings.deepseek_base_url,
+                reasoning_effort=settings.deepseek_reasoning_effort,
                 sizing_config=PositionSizingConfigV1(),
             )
         )

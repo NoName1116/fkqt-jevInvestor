@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 from alembic import command as alembic_command
 from alembic.config import Config
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fkqt_jevinvestor.domain.decision import (
@@ -20,14 +21,27 @@ from fkqt_jevinvestor.domain.decision import (
     DecisionProviderResult,
 )
 from fkqt_jevinvestor.domain.jev_market import (
+    JevEvaluationCommand,
     JevEvaluationStatus,
     JevEvaluationV1,
     JevScope,
 )
-from fkqt_jevinvestor.domain.market_features import MarketSnapshot
+from fkqt_jevinvestor.domain.market_features import (
+    AdjustmentMode,
+    DailyBar,
+    FeatureValue,
+    MarketFeatureSnapshot,
+    MarketSnapshot,
+    MarketSourceAudit,
+    SecurityTradeState,
+)
 from fkqt_jevinvestor.domain.portfolio import PortfolioState, PositionState
+from fkqt_jevinvestor.ingestion.canonical import sha256_json
 from fkqt_jevinvestor.persistence.decision_repository import DecisionEvaluationRepository
-from fkqt_jevinvestor.persistence.models import JevEvaluationRecord
+from fkqt_jevinvestor.persistence.models import (
+    JevEvaluationRecord,
+    PositionSizingRunRecord,
+)
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.providers.base import ProviderContractError
@@ -36,10 +50,13 @@ from fkqt_jevinvestor.services.c_group_decision import (
     CGroupDecisionService,
 )
 from fkqt_jevinvestor.services.jev_market_service import JevRunEvaluationV1
+from fkqt_jevinvestor.services.jev_state_builder import (
+    REQUIRED_SYMBOL_FEATURES,
+    build_jev_states,
+)
 from fkqt_jevinvestor.services.portfolio_service import CreatePortfolio
 from fkqt_jevinvestor.services.position_sizing import PositionSizingConfigV1
 from tests.unit.test_decision_contracts import _jev  # pyright: ignore[reportPrivateUsage]
-from tests.unit.test_position_sizing import _features  # pyright: ignore[reportPrivateUsage]
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -80,6 +97,21 @@ class IllegalActionProvider(FakeDecisionProvider):
         raise ProviderContractError("DECISION_ACTION_NOT_ALLOWED", "7" * 64)
 
 
+class BlockingDecisionProvider(FakeDecisionProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def evaluate(
+        self,
+        command: DecisionEvaluationCommand,
+    ) -> DecisionProviderResult:
+        self.entered.set()
+        await self.release.wait()
+        return await super().evaluate(command)
+
+
 @pytest_asyncio.fixture
 async def session_factory(tmp_path: Path) -> AsyncIterator[SessionFactory]:
     database = tmp_path / "c-group.db"
@@ -97,6 +129,7 @@ async def session_factory(tmp_path: Path) -> AsyncIterator[SessionFactory]:
 
 def _snapshot() -> MarketSnapshot:
     cutoff = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    symbols = ("000001.SZ", "000002.SZ", "600000.SH")
     return MarketSnapshot(
         snapshot_id="market-1",
         decision_date=date(2026, 9, 18),
@@ -105,12 +138,86 @@ def _snapshot() -> MarketSnapshot:
         calendar_complete_through=date(2026, 9, 21),
         universe_snapshot_id="universe-v1",
         universe_snapshot_hash="a" * 64,
-        daily_bars={},
-        security_states={},
+        daily_bars={
+            symbol: (
+                DailyBar(
+                    symbol=symbol,
+                    trade_date=date(2026, 9, 18),
+                    open=Decimal(10),
+                    high=Decimal("10.2"),
+                    low=Decimal("9.8"),
+                    close=Decimal("10.1"),
+                    previous_close=Decimal(10),
+                    volume=Decimal(1000),
+                    amount_cny=Decimal(10000),
+                    adjustment_mode=AdjustmentMode.QFQ,
+                ),
+            )
+            for symbol in symbols
+        },
+        security_states={
+            symbol: SecurityTradeState(
+                symbol=symbol,
+                trade_date=date(2026, 9, 18),
+                trading_day_status="OPEN",
+                trading_status="TRADING",
+                is_st_or_delisting_risk=False,
+                upper_limit_price=Decimal(11),
+                lower_limit_price=Decimal(9),
+                is_initial_no_limit_period=False,
+                corporate_action_status="NONE",
+                market="SZSE" if symbol.endswith(".SZ") else "SSE",
+                board="MAIN",
+                listing_date=date(2020, 1, 1),
+            )
+            for symbol in symbols
+        },
         source_manifest_ids=("manifest-1",),
-        source_audits=(),
+        source_audits=(
+            MarketSourceAudit(
+                upstream_type="FIXTURE",
+                upstream_version="v1",
+                request_scope={"symbols": list(symbols)},
+                data_cutoff=cutoff,
+                schema_version="schema-v1",
+                fetched_at=cutoff,
+                record_count=len(symbols),
+                raw_snapshot_ref="fixture",
+                content_hash="e" * 64,
+            ),
+        ),
         content_hash="b" * 64,
     )
+
+
+def _c_features(symbol: str) -> MarketFeatureSnapshot:
+    cutoff = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    values = {
+        code: FeatureValue(
+            feature_code=code,
+            feature_version="market-features-v1",
+            as_of=cutoff,
+            lookback_window=20,
+            value=(
+                Decimal("0.50")
+                if code == "liquidity_percentile"
+                else Decimal("0.02")
+                if code == "realized_vol_20d"
+                else Decimal(index) / Decimal(100)
+            ),
+            missing_reason=None,
+            source_snapshot_hash="b" * 64,
+        )
+        for index, code in enumerate(REQUIRED_SYMBOL_FEATURES, start=1)
+    }
+    draft = MarketFeatureSnapshot(
+        symbol=symbol,
+        decision_date=date(2026, 9, 18),
+        values=values,
+        content_hash="0" * 64,
+    )
+    canonical = draft.model_copy(update={"content_hash": ""})
+    return draft.model_copy(update={"content_hash": sha256_json(canonical)})
 
 
 def _available_symbol(symbol: str) -> JevEvaluationV1:
@@ -150,6 +257,47 @@ def _jev_run(
             raw_response_hash=None,
             error_code="UNIVERSE_DATA_UNAVAILABLE",
         )
+    features = {
+        symbol: _c_features(symbol)
+        for symbol in ("000001.SZ", "000002.SZ", "600000.SH")
+    }
+    universe_state, symbol_states = build_jev_states(
+        snapshot=_snapshot(),
+        features=features,
+        candidate_symbols=("600000.SH", "000001.SZ"),
+        held_only_symbols=("000002.SZ",),
+        candidate_limit=2,
+    )
+    universe = universe.model_copy(
+        update={
+            "input_hash": JevEvaluationCommand(
+                scope=JevScope.UNIVERSE,
+                state=universe_state,
+                provider_name=universe.provider_name,
+                provider_version=universe.provider_version,
+                model_id=universe.model_id,
+            ).input_hash
+        }
+    )
+    symbol_evaluations = {
+        "000001.SZ": _failed_symbol("000001.SZ"),
+        "000002.SZ": _available_symbol("000002.SZ"),
+        "600000.SH": _available_symbol("600000.SH"),
+    }
+    symbol_evaluations = {
+        symbol: evaluation.model_copy(
+            update={
+                "input_hash": JevEvaluationCommand(
+                    scope=JevScope.SYMBOL,
+                    state=symbol_states[symbol],
+                    provider_name=evaluation.provider_name,
+                    provider_version=evaluation.provider_version,
+                    model_id=evaluation.model_id,
+                ).input_hash
+            }
+        )
+        for symbol, evaluation in symbol_evaluations.items()
+    }
     return JevRunEvaluationV1(
         run_id=run_id,
         decision_date=date(2026, 9, 18),
@@ -158,11 +306,7 @@ def _jev_run(
         candidate_universe_hash="a" * 64,
         market_snapshot_hash="b" * 64,
         universe=universe,
-        symbols={
-            "000001.SZ": _failed_symbol("000001.SZ"),
-            "000002.SZ": _available_symbol("000002.SZ"),
-            "600000.SH": _available_symbol("600000.SH"),
-        },
+        symbols=symbol_evaluations,
     )
 
 
@@ -195,7 +339,7 @@ def _command(run_id: UUID, jev: JevRunEvaluationV1) -> CGroupDecisionCommandV1:
     return CGroupDecisionCommandV1(
         run_id=run_id,
         snapshot=_snapshot(),
-        features={symbol: _features(symbol) for symbol in evaluated},
+        features={symbol: _c_features(symbol) for symbol in evaluated},
         candidate_symbols=symbols,
         candidate_limit=2,
         jev=jev,
@@ -328,6 +472,93 @@ async def test_c_group_rejects_missing_jev_symbol_before_any_provider_call(
         await service.evaluate_run(_command(run_id, jev))
 
     assert provider.commands == []
+
+
+@pytest.mark.asyncio
+async def test_c_group_rejects_tampered_feature_and_jev_bindings_before_calls(
+    session_factory: SessionFactory,
+) -> None:
+    run_id = uuid4()
+    jev = _jev_run(run_id)
+    provider = FakeDecisionProvider()
+    service = CGroupDecisionService(
+        provider=provider,
+        decision_repository=DecisionEvaluationRepository(session_factory),
+        portfolio_repository=PortfolioRepository(session_factory),
+    )
+    command = _command(run_id, jev)
+    symbol = "600000.SH"
+    feature = command.features[symbol]
+    tampered_feature = feature.model_copy(update={"content_hash": "f" * 64})
+
+    with pytest.raises(ValueError, match="C_GROUP_FEATURE_CONTENT_HASH_MISMATCH"):
+        await service.evaluate_run(
+            command.model_copy(
+                update={"features": dict(command.features) | {symbol: tampered_feature}}
+            )
+        )
+
+    values = dict(feature.values)
+    first_code = next(iter(values))
+    values[first_code] = values[first_code].model_copy(
+        update={"source_snapshot_hash": "f" * 64}
+    )
+    wrong_source = feature.model_copy(update={"values": values, "content_hash": "0" * 64})
+    wrong_source = wrong_source.model_copy(
+        update={
+            "content_hash": sha256_json(
+                wrong_source.model_copy(update={"content_hash": ""})
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="C_GROUP_FEATURE_SOURCE_MISMATCH"):
+        await service.evaluate_run(
+            command.model_copy(
+                update={"features": dict(command.features) | {symbol: wrong_source}}
+            )
+        )
+
+    tampered_jev = jev.model_copy(
+        update={
+            "universe": jev.universe.model_copy(update={"input_hash": "f" * 64})
+        }
+    )
+    with pytest.raises(ValueError, match="C_GROUP_JEV_INPUT_MISMATCH"):
+        await service.evaluate_run(command.model_copy(update={"jev": tampered_jev}))
+
+    assert provider.commands == []
+
+
+@pytest.mark.asyncio
+async def test_in_progress_decision_never_persists_sizing_or_signal(
+    session_factory: SessionFactory,
+) -> None:
+    run_id = uuid4()
+    jev = _jev_run(run_id)
+    await _seed_jev(session_factory, jev)
+    blocker = BlockingDecisionProvider()
+    first_service = CGroupDecisionService(
+        provider=blocker,
+        decision_repository=DecisionEvaluationRepository(session_factory),
+        portfolio_repository=PortfolioRepository(session_factory),
+    )
+    second_service = CGroupDecisionService(
+        provider=FakeDecisionProvider(),
+        decision_repository=DecisionEvaluationRepository(session_factory),
+        portfolio_repository=PortfolioRepository(session_factory),
+    )
+    command = _command(run_id, jev)
+    first_task = asyncio.create_task(first_service.evaluate_run(command))
+    await blocker.entered.wait()
+
+    with pytest.raises(RuntimeError, match="C_GROUP_DECISIONS_IN_PROGRESS"):
+        await second_service.evaluate_run(command)
+    async with session_factory() as session:
+        count = await session.scalar(select(func.count(PositionSizingRunRecord.id)))
+    assert count == 0
+
+    blocker.release.set()
+    await first_task
 
 
 @pytest.mark.asyncio

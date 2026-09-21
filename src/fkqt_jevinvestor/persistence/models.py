@@ -421,6 +421,8 @@ class DecisionEvaluationRecord(Base):
     provider_name: Mapped[str] = mapped_column(String(64))
     provider_version: Mapped[str] = mapped_column(String(128))
     model_id: Mapped[str] = mapped_column(String(128))
+    provider_base_url: Mapped[str] = mapped_column(String(512))
+    reasoning_effort: Mapped[str] = mapped_column(String(16))
     prompt_version: Mapped[str] = mapped_column(String(64))
     output_schema_version: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32))

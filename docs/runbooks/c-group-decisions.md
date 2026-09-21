@@ -91,6 +91,7 @@ Probe 使用一只合成空仓证券，只验证四动作 Schema 和无仓位数
 
 ```sql
 SELECT id, symbol, membership, decision_date, provider_name, model_id,
+       provider_base_url, reasoning_effort,
        status, action, error_code, input_hash
 FROM ai_signal_llm_decision_evaluation
 ORDER BY decision_date, symbol;
@@ -129,13 +130,20 @@ ORDER BY sizing_run_id, symbol;
 | `C_GROUP_FROZEN_INPUT_MISMATCH` | 日期、cutoff、D+1 或 hash 不一致 | 重新选择同一冻结输入 |
 | `C_GROUP_JEV_COVERAGE_INCOMPLETE` | Jev 未覆盖候选与持仓并集 | 完整运行 Jev 阶段 |
 | `C_GROUP_FEATURE_IDENTITY_MISMATCH` | 特征 symbol/date 不一致 | 修复冻结特征 |
+| `C_GROUP_FEATURE_CONTENT_HASH_MISMATCH` | 特征内容与声明 hash 不一致 | 丢弃被修改的特征文件并重新冻结 |
+| `C_GROUP_FEATURE_SET_INVALID` | 特征集合不完整或包含非冻结字段 | 使用 Phase 2 固定特征全集重新冻结 |
+| `C_GROUP_FEATURE_SOURCE_MISMATCH` | 特征未绑定本次 MarketSnapshot | 不得混用不同快照的特征 |
+| `C_GROUP_JEV_INPUT_MISMATCH` | Jev input hash 不属于本次冻结 State | 重新运行同一冻结输入的 Jev 阶段 |
+| `C_GROUP_DECISIONS_IN_PROGRESS` | 同一正式键仍由另一个 worker 持有租约 | 等待原运行完成；此时不会保存仓位或信号 |
 | `C_GROUP_DUPLICATE_CANDIDATE` | 候选重复 | 清理候选列表 |
 | `C_GROUP_CANDIDATE_LIMIT_EXCEEDED` | 候选数超过容量 | 修正列表或容量并创建新运行 |
 | `C_GROUP_HISTORY_POINT_IN_TIME_VIOLATION` | 历史动作晚于决策日 | 修复历史快照 |
 | `REQUIRED_DECISION_EVIDENCE_MISSING` | Jev 或必要特征不可用 | 该票保存 `NO_SIGNAL`；检查上游失败码 |
-| `PROVIDER_UNAVAILABLE` | DeepSeek 超时或不可用 | 保留 `NO_SIGNAL`，新 run 才重试 |
+| `PROVIDER_UNAVAILABLE` | DeepSeek 超时或不可用 | 同一正式键保持不可变 `NO_SIGNAL`；修复服务后以新 Provider/模型版本或新冻结输入显式重评 |
 | `DECISION_RESPONSE_CONTRACT_INVALID` | 响应不满足 Schema/allowed actions | 检查 Attempt 的响应 hash，不保存模型正文到失败载荷 |
 | `PREEXISTING_GROSS_LIMIT_EXCEEDED` | 决策前总仓位已超上限 | 阻止新增风险，不自动清仓 |
+| `MIN_ENTRY_POSITION_AFTER_SCALING` | 组合缩放后开仓权重低于最低值 | 阻止该票开仓，不生成碎片仓位 |
+| `PORTFOLIO_HISTORICAL_STATE_UNAVAILABLE` | 请求日期早于数据库最新 NAV，但没有历史组合快照还原器 | 使用该日冻结组合输入；不得把当前持仓冒充历史持仓 |
 | `C_GROUP_PERSISTENCE_IDENTITY_MISMATCH` | 决策、仓位、Signal 身份不一致 | 拒绝整批保存 |
 | `C_GROUP_IDEMPOTENCY_CONFLICT` | 同 run 的冻结输入或目标发生变化 | 创建新 run，禁止覆盖历史 |
 | `PORTFOLIO_VERSION_CONFLICT` | 组合版本并发变化 | 重新读取组合并创建新 run |
@@ -163,7 +171,7 @@ ORDER BY sizing_run_id, symbol;
 |---|---|---|
 | 命令在网络前退出 | stderr 稳定错误码 | 按第 7 节修复配置或冻结输入 |
 | 某票 `NO_SIGNAL`，其他票正常 | Evaluation `error_code` 与 Jev 状态 | 修复该票特征/Jev；不要伪造概率 |
-| 全部 `NO_SIGNAL` | Universe Jev 与 Provider Attempt | Universe 失败时预期不调用 LLM；Provider 失败时创建新 run 重试 |
+| 全部 `NO_SIGNAL` | Universe Jev 与 Provider Attempt | Universe 失败时预期不调用 LLM；Provider 终态不会因只换 run ID 自动重试 |
 | 目标权重为 0 | PositionTarget `block_code` | 检查流动性、最低建仓和组合上限 |
 | 重放 hash 不匹配 | 文件名、文件内容、日期清单 | 从可信冻结产物重新发布，不修改原文件 |
 | 数据库版本冲突 | Portfolio `version` | 重新读取组合状态并创建新 run |
@@ -171,6 +179,8 @@ ORDER BY sizing_run_id, symbol;
 ## 11. Phase 5 停止点
 
 Phase 4 到此只支持人工触发的单日决策、冻结重放和 D+1 模拟订单。自动收盘调度、崩溃恢复、限流并发、监控告警、长期前向队列和 A/B/C/D 批量实验属于 Phase 5；不得把当前 CLI 当成无人值守生产调度器。
+
+当前 `FrozenTargetBundleV1` 与 `FrozenTargetStore` 已可直接被 Python 调用，但尚未提供“从数据库一键导出冻结目标”的独立 CLI；批量数据集发布由 Phase 5 补齐。在此之前不得手工修改内容寻址 JSON。
 
 ## 12. 自检清单
 

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from fkqt_jevinvestor.domain.decision import (
     DecisionEvaluationCommand,
@@ -164,3 +165,50 @@ async def test_provider_rejects_command_config_mismatch_without_calling_sdk() ->
         await provider.evaluate(_command())
 
     assert client.responses.calls == []
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_nested_sdk_refusal() -> None:
+    response = SimpleNamespace(
+        status="completed",
+        output_text='{"action":"ENTER","thesis":"证据一致。","invalidation":"趋势失效。"}',
+        refusal=None,
+        incomplete_details=None,
+        output=(
+            SimpleNamespace(
+                content=(SimpleNamespace(type="refusal", refusal="not allowed"),)
+            ),
+        ),
+    )
+    provider = DeepSeekDecisionProvider(
+        client=FakeClient(response),
+        model="deepseek-flash",
+        provider_version="responses-v1",
+        reasoning_effort="high",
+        timeout_seconds=30,
+    )
+
+    with pytest.raises(ProviderContractError, match="DECISION_RESPONSE_REFUSED"):
+        await provider.evaluate(_command())
+
+
+def test_from_api_key_disables_sdk_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            self.responses = FakeResponses(_response())
+
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+
+    DeepSeekDecisionProvider.from_api_key(
+        api_key=SecretStr("test-key"),
+        base_url="https://api.deepseek.com",
+        model="deepseek-flash",
+        provider_version="responses-v1",
+        reasoning_effort="high",
+        timeout_seconds=30,
+    )
+
+    assert captured["max_retries"] == 0

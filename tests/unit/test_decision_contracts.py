@@ -146,38 +146,43 @@ def test_held_only_input_cannot_enter() -> None:
         _input(membership=DecisionMembership.HELD_ONLY)
 
 
-@pytest.mark.parametrize("future_kind", ["feature", "universe_jev", "symbol_jev"])
-def test_decision_input_rejects_future_evidence(future_kind: str) -> None:
+def test_decision_input_rejects_future_feature_data() -> None:
     cutoff = datetime(2026, 9, 18, 15, tzinfo=UTC)
-    updates: dict[str, object] = {}
-    if future_kind == "feature":
-        future = FeatureValue(
-            feature_code="realized_vol_20d",
-            feature_version="market-features-v1",
-            as_of=cutoff + timedelta(seconds=1),
-            lookback_window=20,
-            value=Decimal("0.02000000"),
-            missing_reason=None,
-            source_snapshot_hash="d" * 64,
-        )
-        updates["feature_snapshot"] = MarketFeatureSnapshot(
+    future = FeatureValue(
+        feature_code="realized_vol_20d",
+        feature_version="market-features-v1",
+        as_of=cutoff + timedelta(seconds=1),
+        lookback_window=20,
+        value=Decimal("0.02000000"),
+        missing_reason=None,
+        source_snapshot_hash="d" * 64,
+    )
+    updates: dict[str, object] = {
+        "feature_snapshot": MarketFeatureSnapshot(
             symbol="600000.SH",
             decision_date=date(2026, 9, 18),
             values={"realized_vol_20d": future},
             content_hash="1" * 64,
         )
-    elif future_kind == "universe_jev":
-        updates["universe_jev"] = _jev(
-            JevScope.UNIVERSE, symbol=None, finished_at=cutoff + timedelta(seconds=1)
-        )
-    else:
-        updates["symbol_jev"] = _jev(
-            JevScope.SYMBOL,
-            symbol="600000.SH",
-            finished_at=cutoff + timedelta(seconds=1),
-        )
+    }
     with pytest.raises(ValidationError, match="DECISION_POINT_IN_TIME_VIOLATION"):
         _input(**updates)
+
+
+def test_decision_input_accepts_jev_computed_after_cutoff() -> None:
+    cutoff = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    future = cutoff + timedelta(seconds=1)
+
+    decision_input = _input(
+        universe_jev=_jev(JevScope.UNIVERSE, symbol=None, finished_at=future),
+        symbol_jev=_jev(
+            JevScope.SYMBOL,
+            symbol="600000.SH",
+            finished_at=future,
+        ),
+    )
+
+    assert decision_input.universe_jev.finished_at == future
 
 
 def test_command_hash_is_canonical_and_formal_key_excludes_run_identity() -> None:
@@ -203,6 +208,25 @@ def test_command_hash_is_canonical_and_formal_key_excludes_run_identity() -> Non
 
     assert left_command.input_hash == right_command.input_hash
     assert left_command.formal_key == right_command.formal_key
+
+
+def test_formal_key_includes_normalized_base_url_and_reasoning_effort() -> None:
+    command = DecisionEvaluationCommand(
+        decision_input=_input(),
+        provider_name="deepseek",
+        provider_version="responses-v1",
+        model_id="deepseek-flash",
+        provider_base_url="https://api.deepseek.com/",
+        reasoning_effort="high",
+    )
+
+    assert command.provider_base_url == "https://api.deepseek.com"
+    assert command.formal_key != command.model_copy(
+        update={"reasoning_effort": "low"}
+    ).formal_key
+    assert command.formal_key != command.model_copy(
+        update={"provider_base_url": "https://proxy.example.com"}
+    ).formal_key
 
 
 def test_evaluation_success_and_failure_payloads_are_mutually_exclusive() -> None:

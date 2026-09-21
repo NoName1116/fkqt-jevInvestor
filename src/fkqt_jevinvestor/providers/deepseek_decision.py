@@ -40,12 +40,14 @@ class DeepSeekDecisionProvider:
         provider_version: str,
         reasoning_effort: Literal["low", "high"],
         timeout_seconds: float,
+        base_url: str = "https://api.deepseek.com",
     ) -> None:
         self._client = client
         self._model = model
         self._provider_version = provider_version
         self._reasoning_effort = reasoning_effort
         self._timeout_seconds = timeout_seconds
+        self._base_url = base_url.rstrip("/")
 
     @classmethod
     def from_api_key(
@@ -64,6 +66,7 @@ class DeepSeekDecisionProvider:
             api_key=api_key.get_secret_value(),
             base_url=base_url,
             timeout=timeout_seconds,
+            max_retries=0,
         )
         return cls(
             client=cast(ResponsesClient, client),
@@ -71,6 +74,7 @@ class DeepSeekDecisionProvider:
             provider_version=provider_version,
             reasoning_effort=reasoning_effort,
             timeout_seconds=timeout_seconds,
+            base_url=base_url,
         )
 
     async def evaluate(
@@ -106,6 +110,8 @@ class DeepSeekDecisionProvider:
             command.provider_name != "deepseek"
             or command.provider_version != self._provider_version
             or command.model_id != self._model
+            or command.provider_base_url.rstrip("/") != self._base_url
+            or command.reasoning_effort != self._reasoning_effort
         ):
             raise ProviderContractError("DECISION_PROVIDER_CONFIG_MISMATCH")
 
@@ -114,7 +120,13 @@ class DeepSeekDecisionProvider:
         response: object,
         command: DecisionEvaluationCommand,
     ) -> DecisionProviderResult:
-        if getattr(response, "refusal", None):
+        nested_refusal = any(
+            getattr(content, "type", None) == "refusal"
+            or bool(getattr(content, "refusal", None))
+            for output in (getattr(response, "output", None) or ())
+            for content in (getattr(output, "content", None) or ())
+        )
+        if getattr(response, "refusal", None) or nested_refusal:
             raise ProviderContractError("DECISION_RESPONSE_REFUSED")
         if getattr(response, "status", None) != "completed":
             raise ProviderContractError("DECISION_RESPONSE_INCOMPLETE")

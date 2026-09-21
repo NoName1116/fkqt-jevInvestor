@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from fkqt_jevinvestor.domain.jev_market import (
     JevEvaluationV1,
@@ -96,11 +96,6 @@ class DecisionInputV1(BaseModel):
             ):
                 raise ValueError("DECISION_POINT_IN_TIME_VIOLATION")
         if (
-            self.universe_jev.finished_at > self.decision_cutoff
-            or self.symbol_jev.finished_at > self.decision_cutoff
-        ):
-            raise ValueError("DECISION_POINT_IN_TIME_VIOLATION")
-        if (
             self.universe_jev.scope is not JevScope.UNIVERSE
             or self.symbol_jev.scope is not JevScope.SYMBOL
             or self.symbol_jev.symbol != self.symbol
@@ -145,10 +140,21 @@ class DecisionEvaluationCommand(BaseModel):
     provider_name: str = Field(min_length=1)
     provider_version: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
+    provider_base_url: str = Field(
+        default="https://api.deepseek.com",
+        min_length=1,
+        max_length=512,
+    )
+    reasoning_effort: Literal["low", "high"] = "high"
     prompt_version: Literal["decision-prompt-v1"] = DECISION_PROMPT_VERSION
     output_schema_version: Literal["decision-output-v1"] = (
         DECISION_OUTPUT_SCHEMA_VERSION
     )
+
+    @field_validator("provider_base_url", mode="before")
+    @classmethod
+    def normalize_provider_base_url(cls, value: object) -> object:
+        return value.rstrip("/") if isinstance(value, str) else value
 
     @property
     def input_hash(self) -> str:
@@ -162,6 +168,8 @@ class DecisionEvaluationCommand(BaseModel):
                 "provider_name": self.provider_name,
                 "provider_version": self.provider_version,
                 "model_id": self.model_id,
+                "provider_base_url": self.provider_base_url,
+                "reasoning_effort": self.reasoning_effort,
                 "prompt_version": self.prompt_version,
                 "output_schema_version": self.output_schema_version,
             }
@@ -192,6 +200,12 @@ class DecisionEvaluationV1(BaseModel):
     provider_name: str = Field(min_length=1)
     provider_version: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
+    provider_base_url: str = Field(
+        default="https://api.deepseek.com",
+        min_length=1,
+        max_length=512,
+    )
+    reasoning_effort: Literal["low", "high"] = "high"
     prompt_version: str = Field(min_length=1)
     output_schema_version: str = Field(min_length=1)
     started_at: datetime

@@ -55,7 +55,13 @@ def test_phase4_decision_and_sizing_tables_are_constrained_and_reversible(
         assert ("formal_key",) in _unique_columns(
             connection, "ai_signal_llm_decision_evaluation"
         )
-        assert {"current_owner_token", "lease_expires_at", "raw_response_text"} <= (
+        assert {
+            "current_owner_token",
+            "lease_expires_at",
+            "raw_response_text",
+            "provider_base_url",
+            "reasoning_effort",
+        } <= (
             _columns(connection, "ai_signal_llm_decision_evaluation")
         )
         assert ("evaluation_id", "sequence") in _unique_columns(

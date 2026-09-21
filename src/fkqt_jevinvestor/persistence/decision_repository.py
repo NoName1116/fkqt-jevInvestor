@@ -1,9 +1,9 @@
 import asyncio
 import hashlib
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -113,17 +113,8 @@ class DecisionEvaluationRepository:
                         return await self._create_claim(
                             session, run_id, command, input_json
                         )
-                    already_linked = await self._has_run_link(
-                        session, run_id, record.id
-                    )
                     await self._ensure_run_link(session, run_id, record.id)
-                    if (
-                        record.status != DecisionEvaluationStatus.IN_PROGRESS.value
-                        and (
-                            record.status == DecisionEvaluationStatus.AVAILABLE.value
-                            or already_linked
-                        )
-                    ):
+                    if record.status != DecisionEvaluationStatus.IN_PROGRESS.value:
                         return DecisionClaim(
                             status=ClaimStatus.COMPLETE,
                             evaluation_id=record.id,
@@ -146,7 +137,7 @@ class DecisionEvaluationRepository:
                             formal_key=record.formal_key,
                             attempt_id=None,
                         )
-                    return await self._retry_claim(session, run_id, command, record)
+                    raise DecisionClaimConflict("DECISION_TERMINAL_STATE_INVALID")
             except IntegrityError as exc:
                 return await self._claim_after_competition(run_id, command, exc)
 
@@ -205,6 +196,10 @@ class DecisionEvaluationRepository:
                 provider_name=record.provider_name,
                 provider_version=record.provider_version,
                 model_id=record.model_id,
+                provider_base_url=record.provider_base_url,
+                reasoning_effort=cast(
+                    Literal["low", "high"], record.reasoning_effort
+                ),
                 prompt_version=record.prompt_version,
                 output_schema_version=record.output_schema_version,
                 started_at=started_at,
@@ -239,21 +234,26 @@ class DecisionEvaluationRepository:
         portfolio_id: str,
         symbol: str,
         limit: int = 5,
+        as_of: date | None = None,
     ) -> tuple[DecisionHistoryV1, ...]:
         if limit <= 0 or limit > 5:
             raise ValueError("DECISION_HISTORY_LIMIT_INVALID")
         async with self._session_factory() as session:
+            statement = select(DecisionEvaluationRecord).where(
+                DecisionEvaluationRecord.portfolio_id == portfolio_id,
+                DecisionEvaluationRecord.symbol == symbol,
+                DecisionEvaluationRecord.status
+                == DecisionEvaluationStatus.AVAILABLE.value,
+            )
+            if as_of is not None:
+                statement = statement.where(
+                    DecisionEvaluationRecord.decision_date <= as_of
+                )
             records = tuple(
                 await session.scalars(
-                    select(DecisionEvaluationRecord)
-                    .where(
-                        DecisionEvaluationRecord.portfolio_id == portfolio_id,
-                        DecisionEvaluationRecord.symbol == symbol,
-                        DecisionEvaluationRecord.status
-                        == DecisionEvaluationStatus.AVAILABLE.value,
-                    )
-                    .order_by(DecisionEvaluationRecord.decision_date.desc())
-                    .limit(limit)
+                    statement.order_by(
+                        DecisionEvaluationRecord.decision_date.desc()
+                    ).limit(limit)
                 )
             )
         return tuple(
@@ -291,6 +291,8 @@ class DecisionEvaluationRepository:
             provider_name=command.provider_name,
             provider_version=command.provider_version,
             model_id=command.model_id,
+            provider_base_url=command.provider_base_url.rstrip("/"),
+            reasoning_effort=command.reasoning_effort,
             prompt_version=command.prompt_version,
             output_schema_version=command.output_schema_version,
             status=DecisionEvaluationStatus.IN_PROGRESS.value,
@@ -562,6 +564,8 @@ class DecisionEvaluationRepository:
             or result.provider_name != record.provider_name
             or result.provider_version != record.provider_version
             or result.model_id != record.model_id
+            or result.provider_base_url != record.provider_base_url
+            or result.reasoning_effort != record.reasoning_effort
             or result.prompt_version != record.prompt_version
             or result.output_schema_version != record.output_schema_version
         ):
@@ -623,6 +627,8 @@ class DecisionEvaluationRepository:
             provider_name=record.provider_name,
             provider_version=record.provider_version,
             model_id=record.model_id,
+            provider_base_url=record.provider_base_url,
+            reasoning_effort=cast(Literal["low", "high"], record.reasoning_effort),
             prompt_version=record.prompt_version,
             output_schema_version=record.output_schema_version,
             started_at=started_at,

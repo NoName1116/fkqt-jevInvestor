@@ -158,6 +158,8 @@ async def seed_c_group_evaluation(session_factory: SessionFactory) -> None:
                 provider_name="deepseek",
                 provider_version="responses-v1",
                 model_id="deepseek-flash",
+                provider_base_url="https://api.deepseek.com",
+                reasoning_effort="high",
                 prompt_version="decision-prompt-v1",
                 output_schema_version="decision-output-v1",
                 status="AVAILABLE",
@@ -312,6 +314,29 @@ async def test_missed_order_expires_on_later_trade_date(
 
 
 @pytest.mark.asyncio
+async def test_historical_state_rejects_date_before_latest_nav(
+    session_factory: SessionFactory,
+) -> None:
+    repository = PortfolioRepository(session_factory)
+    await repository.create(CreatePortfolio(portfolio_id="portfolio-1", name="Demo"))
+    await accepted_batch(repository)
+    await repository.execute_trade_date(
+        ExecuteTradeDate(
+            portfolio_id="portfolio-1",
+            trade_date=date(2026, 9, 22),
+            expected_version=1,
+            market_snapshots={"000001.SZ": execution_market()},
+        )
+    )
+
+    with pytest.raises(
+        PortfolioTransactionError,
+        match="PORTFOLIO_HISTORICAL_STATE_UNAVAILABLE",
+    ):
+        await repository.get_state("portfolio-1", date(2026, 9, 18))
+
+
+@pytest.mark.asyncio
 async def test_repeated_execution_does_not_create_another_fill(
     session_factory: SessionFactory,
 ) -> None:
@@ -358,6 +383,44 @@ async def test_c_group_sizing_signal_and_order_are_saved_atomically(
     assert stored.orders and stored.orders[0].symbol == "000001.SZ"
     assert await scalar_count(session_factory, PositionSizingRunRecord) == 1
     assert await scalar_count(session_factory, PositionTargetRecord) == 1
+    assert await scalar_count(session_factory, SignalBatchRecord) == 1
+    assert await scalar_count(session_factory, SignalRecord) == 1
+    assert await scalar_count(session_factory, VirtualOrderRecord) == 1
+
+
+@pytest.mark.asyncio
+async def test_distinct_runs_reuse_content_addressed_signal_batch(
+    session_factory: SessionFactory,
+) -> None:
+    repository = PortfolioRepository(session_factory)
+    await repository.create(CreatePortfolio(portfolio_id="portfolio-1", name="Demo"))
+    await seed_c_group_evaluation(session_factory)
+    state = await repository.get_state("portfolio-1", date(2026, 9, 18))
+    evaluation = _evaluation("000001.SZ", DecisionAction.ENTER)
+    first_run = _run(
+        (evaluation,),
+        {"000001.SZ": _features("000001.SZ")},
+        state,
+    )
+    second_run = first_run.model_copy(update={"run_id": "run-2"})
+
+    first = await repository.save_c_group_signal_batch(
+        first_run,
+        PositionSizingConfigV1(),
+        to_validated_signal_batch(first_run),
+        state,
+    )
+    second = await repository.save_c_group_signal_batch(
+        second_run,
+        PositionSizingConfigV1(),
+        to_validated_signal_batch(second_run),
+        state,
+    )
+
+    assert second.batch_id == first.batch_id
+    assert second.orders == first.orders
+    assert await scalar_count(session_factory, PositionSizingRunRecord) == 2
+    assert await scalar_count(session_factory, PositionTargetRecord) == 2
     assert await scalar_count(session_factory, SignalBatchRecord) == 1
     assert await scalar_count(session_factory, SignalRecord) == 1
     assert await scalar_count(session_factory, VirtualOrderRecord) == 1

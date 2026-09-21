@@ -190,7 +190,11 @@
 10. 现有 Phase 1 Signal 表强制要求 `confidence`，但 LLM 不得输出或合成数值置信度；兼容 Adapter 固定写 `Decimal(0)` 表示 `NOT_PROVIDED`，正式 Decision/Sizing 契约不包含该字段。
 11. DeepSeek Responses API 的推理强度字段是 `reasoning={"effort": "high"}`；`reasoning_effort` 仅是配置名，不直接作为请求字段发送。
 12. C 组在调用 LLM 前验证 decision date、cutoff、D+1、候选池 hash、行情 hash 和 Jev 全证券覆盖；Jev 或特征失败会保存正式 `DATA_UNAVAILABLE/NO_SIGNAL`，不会调用备用模型。
-13. 同一 `run_id` 重放失败决策不会再次调用 Provider；不同 `run_id` 才能创建新的失败重试 Attempt，符合“重放不重评”的边界。
+13. Decision 正式键的成功或失败终态均不可变并可跨 `run_id` 复用；只有过期的 `IN_PROGRESS` 租约允许接管。显式模型重评必须改变 Provider/模型配置身份或冻结输入，不能靠更换 `run_id` 覆盖旧历史。
 14. 仓位计算固定为 `position-sizing-v1`，LLM 输出契约没有仓位、数量、价格或置信度字段；现有 Signal 兼容层中的 `confidence=0` 仅表示未提供，正式决策和仓位表不读取它。
 15. C 组冻结回测文件使用 `<root>/<dataset_id>/<decision_date>/<content_hash>.json`，写入采用临时文件加原子替换，加载时重新计算内容哈希并验证数据集、日期、三类输入 hash 和仓位版本。
 16. 单日 CLI 需要显式配置冻结 snapshot hash 和候选证券列表；候选列表不会由 LLM、Jev 或本地排序算法自行构造。缺少冻结输入或 Provider Secret 时，在创建 Client 前以稳定错误退出。
+17. Phase 4 首轮独立审查发现 9 个 Important：Jev 完成时间误判、IN_PROGRESS 落信号、失败重试改写历史、跨 run 唯一键冲突、冻结输入绑定不足、仓位取整越界、SDK 隐式重试、Provider 配置未入正式键、历史日期读取当前持仓。现已全部修复并加入定向测试。
+18. 仓位缩放统一使用 `ROUND_DOWN`；缩放后低于最低开仓权重的 `ENTER` 变为 `BLOCKED/MIN_ENTRY_POSITION_AFTER_SCALING`，总仓位不超过 80%，现金不低于 20%。
+19. 不同 run 但相同正式内容复用同一个内容寻址 SignalBatch、Signal 和 VirtualOrder，同时分别保存 PositionSizingRun 与 PositionTarget 审计记录。
+20. 当前冻结目标 Store 可由 Python 直接使用，但数据库到冻结 Target bundle 的一键导出 CLI 尚未实现，已作为 Phase 5 已知非阻断项记录。
