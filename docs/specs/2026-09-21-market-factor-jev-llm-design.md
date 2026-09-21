@@ -6,13 +6,13 @@
 
 适用范围：独立仓库初始化、Phase 0/1 迁移、Phase 2 至 Phase 6
 
-需求基线：`REQUIREMENTS.md` v0.3
+需求基线：`REQUIREMENTS.md` v0.4
 
 ## 1. 执行摘要
 
 `fkqt-jevInvestor` 是独立于 FKQT 的纯 Python A 股日频模拟决策系统。它复用 FKQT 提供的候选池、行情、交易日历和证券结构化状态，但不导入 FKQT 内部 Python 模块、不访问 FKQT 可写数据库、不调用旧交易链。
 
-第一版主链路为：确定性行情特征 → Jev 类型化概率 → LLM 离散动作 → 确定性仓位 → 虚拟成交与持仓账本。LLM 只决定 `ENTER/KEEP/EXIT/AVOID`，Jev 只输出概率，所有数值计算和仓位均由代码完成。
+第一版主链路为 C 组：默认约 80 只冻结候选股票 → 确定性行情特征 → Jev 盈亏相关类型化概率 → LLM 离散动作 → 确定性仓位 → 虚拟成交与持仓账本。LLM 只决定 `ENTER/KEEP/EXIT/AVOID`，Jev 只输出待校准概率，真实标签、已实现盈亏、交易指标和仓位均由代码计算。
 
 第一版只交付 FastAPI、CLI、回测与模拟账本，不开发前端。未来 UI 通过版本化 REST API 接入，可复用 FKQT 前端的视觉和组件，也可以建设独立前端；前端不进入当前纯 Python 仓库边界。
 
@@ -48,7 +48,7 @@
 │   └─ 趋势、动量、反转、波动、成交、流动性、跳空、横截面       │
 │                         ▼                                    │
 │ Jev Probability Provider                                     │
-│   └─ 候选池风险、个股方向、趋势延续、成交确认、过热风险        │
+│   └─ 候选池风险、个股下一日/五日盈亏、回撤、盈亏不对称概率    │
 │                         ▼                                    │
 │ Decision LLM Provider                                        │
 │   └─ ENTER / KEEP / EXIT / AVOID / NO_SIGNAL                 │
@@ -148,16 +148,15 @@ Phase 3 详细契约以 `docs/specs/2026-09-21-phase-3-jev-market-state-design.m
 
 个股级窄问题：
 
-- `direction_regime`：`UP/RANGE/DOWN`；
-- `trend_persistence`：`CONTINUE/UNCERTAIN/REVERSE`；
-- `volume_confirmation`：`CONFIRMED/AMBIGUOUS/REJECTED`；
-- `overheat_risk`：`LOW/MEDIUM/HIGH`；
-- `factor_conflict`：`LOW/MEDIUM/HIGH`；
+- `next_session_pnl`：`PROFIT/FLAT/LOSS`；
+- `profitability_5d`：`PROFITABLE/FLAT/LOSS`；
+- `drawdown_risk_5d`：`LOW/MEDIUM/HIGH`；
+- `payoff_asymmetry_5d`：`UPSIDE_DOMINANT/BALANCED/DOWNSIDE_DOMINANT`；
 - `data_sufficiency`：`SUFFICIENT/LIMITED/INSUFFICIENT`。
 
-这些概率表达对当前状态及其延续倾向的分类判断，不得解释为真实未来涨跌概率。输出必须保存完整概率分布、问题版本、判定标准版本、模型标识、请求哈希、响应哈希、延迟和状态。凭据缺失、超时或限流记录 `PROVIDER_UNAVAILABLE`；Schema 或概率无效记录 `CONTRACT_INVALID`；必要输入不足记录 `DATA_UNAVAILABLE`。失败状态不得包含合成概率。
+这些概率是待样本外校准的预测，不得在校准前解释为真实发生频率。真实盈亏、最大不利波动和盈亏不对称标签由代码使用 D+1 之后的冻结行情生成，绝不进入 D 日正式输入。输出必须保存完整概率分布、问题版本、判定标准版本、模型标识、请求哈希、响应哈希、延迟和状态。凭据缺失、超时或限流记录 `PROVIDER_UNAVAILABLE`；Schema 或概率无效记录 `CONTRACT_INVALID`；必要输入不足记录 `DATA_UNAVAILABLE`。失败状态不得包含合成概率。
 
-Jev 不输出连续因子权重、仓位、收益率、价格或交易动作。动态权重如有需要，只能由版本化确定性代码将候选池状态概率映射到预定义权重 Profile。
+Jev 不输出连续因子权重、仓位、连续收益率、价格或交易动作。第一版完全删除动态权重、权重 Profile 和概率到权重的映射。
 
 ## 7. LLM 离散决策
 
@@ -213,12 +212,12 @@ Record Replay 只读冻结记录，不调用 FKQT、Jev 或 LLM。Model Re-evalu
 
 | 实验 | 决策链 | 目的 |
 |---|---|---|
-| A | 确定性因子 → LLM → 仓位引擎 | 无 Jev 的 LLM 基线 |
-| B | 确定性因子 → Jev → LLM → 仓位引擎 | 测量 Jev 增量 |
-| C | 确定性因子 → Jev 概率 → 确定性动作映射 → 仓位引擎 | 测量最终 LLM 增量 |
-| D | 确定性因子 → 规则方向 → 仓位引擎 | 纯确定性基线 |
+| A | 确定性规则 → 仓位引擎 | 纯规则基线 |
+| B | 确定性特征 → LLM → 仓位引擎 | 无 Jev 的 LLM 基线 |
+| **C** | **确定性特征 → Jev 盈亏概率 → LLM → 仓位引擎** | **第一版主链，最高优先级** |
+| D | 确定性特征 → Jev 盈亏概率 → 确定性动作映射 → 仓位引擎 | 测量最终 LLM 增量 |
 
-四组固定候选池、行情快照、截止时间、仓位公式、交易成本、执行规则和评估区间。Jev 或 LLM 只有在样本外数据上相对 D 组产生可重复增量才保留。
+四组固定候选池、行情快照、截止时间、仓位公式、交易成本、执行规则和评估区间。Jev 或 LLM 只有在样本外数据上相对 A 组纯规则基线产生可重复增量才保留；C 组是产品主链，但不豁免该门槛。
 
 ## 11. API、CLI 与未来前端
 
@@ -253,7 +252,7 @@ Phase 2 的第一个交付必须冻结 `backtest-contract-v1`：核心团队提�
 
 ### Phase 3：Jev 行情概率
 
-实现候选池级与个股级 Jev 状态、窄问题、概率持久化、失败语义、调用审计和真实凭据门控测试。候选池状态在同一正式运行中只调用一次并供全部个股复用；个股状态按证券独立调用。
+优先实现 C 组所需的候选池级风险和个股盈亏概率契约、概率持久化、真实标签口径、失败语义、调用审计和真实凭据门控测试。候选池状态在同一正式运行中只调用一次并供全部个股复用；个股状态按证券独立调用。
 
 ### Phase 4：LLM 离散动作与仓位引擎
 
@@ -284,8 +283,8 @@ Contributor 不直接调用 FKQT、Jev、LLM、FastAPI 或 SQLAlchemy。她实�
 | 快照包含未来数据 | `POINT_IN_TIME_VIOLATION`，整批拒绝 |
 | 交易日历未知 | 整批拒绝排期 |
 | 必要特征不足 | 证券记录 `DATA_UNAVAILABLE`，不进入模型 |
-| Jev 不可用 | B/C 组失败，不伪造概率、不跨组降级 |
-| LLM 不可用 | A/B 组返回 `NO_SIGNAL`，保持持仓 |
+| Jev 不可用 | C/D 组失败，不伪造概率、不跨组降级 |
+| LLM 不可用 | B/C 组返回 `NO_SIGNAL`，保持持仓 |
 | 仓位约束无法满足 | 整批仓位方案失败，不部分提交 |
 | D+1 不可成交 | 记录终态失败，不跨日追单 |
 | 重复正式请求 | 返回已保存结果，不重复调用 Provider |

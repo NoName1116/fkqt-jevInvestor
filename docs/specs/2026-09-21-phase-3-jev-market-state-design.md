@@ -4,7 +4,7 @@
 
 状态：待用户书面复核
 
-需求基线：`REQUIREMENTS.md` v0.3（R7、R8、R10、R12、R14、R21、R23、R24、R26、R29、R33、R37—R41）
+需求基线：`REQUIREMENTS.md` v0.4（R7、R8、R10、R12、R14、R21、R23、R24、R26、R27、R29、R33、R37—R43）
 
 上游阶段：Phase 2 行情快照与确定性特征
 
@@ -12,16 +12,16 @@
 
 ## 1. 执行摘要
 
-Phase 3 将原有“Jev 输出因子占比”方案替换为“Jev 输出市场和个股状态的有限标签概率”。Python 继续负责所有可精确计算的指标、归一化、横截面位置和权重映射；Jev 只回答代码难以用单一阈值稳定表达的状态判断问题。
+Phase 3 将原有“Jev 输出因子占比”方案替换为“Jev 输出候选池风险和个股后续盈亏相关类别的有限标签概率”。Python 继续负责所有可精确计算的行情指标、归一化、横截面位置、未来真实标签和已实现盈亏；Jev 负责对尚未发生的盈亏类别、最大不利波动和盈亏不对称性给出待校准预测。
 
-Jev 输出描述的是：在决策日 D 的截止时间内，输入状态更符合哪个有限标签，以及当前趋势更偏向延续、模糊还是反转。它不是经统计校准的未来涨跌概率，也不是未来收益预测。系统必须通过独立样本外回测和概率校准检验判断这些输出是否具有交易增量。
+Jev 的数值是模型预测概率，不是连续收益率，也不能在样本外校准前视为真实发生频率。代码使用 D+1 之后的冻结行情生成真实标签，回测引擎计算实际收益、回撤、风险比率和费用。第一版的主产品链路是 C 组“确定性特征 → Jev 盈亏概率 → LLM 离散动作 → 确定性仓位”，其余实验组只用于消融和基线比较。
 
 ```text
 冻结行情与证券状态
         ↓
 Python 确定性特征
         ├── 候选池级压缩状态 ──→ JevUniverseStateV1 ──→ 候选池风险概率
-        └── 个股级压缩状态 ──→ JevSymbolStateV1 ──→ 个股状态概率
+        └── 个股级压缩状态 ──→ JevSymbolStateV1 ──→ 后续盈亏概率
                                                         ↓
                                              Phase 4 决策 LLM
                                                         ↓
@@ -35,19 +35,19 @@ Python 确定性特征
 ### 2.1 目标
 
 1. 以版本化领域 Entity 冻结 Jev 候选池级和个股级输入。
-2. 使用有限标签概率分布表达市场风险与个股状态判断。
+2. 使用有限标签概率分布表达候选池风险以及个股下一交易日和未来 5 个交易日的盈亏相关预测。
 3. 同一候选池状态在同一正式运行中只调用一次并供全部个股复用。
 4. 保存完整概率、调用状态和版本信息，支持离线重放、样本外校准和模型对比。
 5. 在 Provider 失败、响应无效和输入不足时提供明确、不可伪造的失败语义。
-6. 保持回测 Contributor 已冻结的 `backtest-contract-v1` 不变。
+6. 优先支撑 C 组 Jev + LLM 主链，同时保持回测 Contributor 已冻结的 `backtest-contract-v1` 不变。
 
 ### 2.2 非目标
 
 1. 不让 Jev 直接输出交易动作。
-2. 不让 Jev 输出连续因子权重、仓位、价格或收益率。
+2. 不让 Jev 输出连续因子权重、仓位、价格或连续收益率。
 3. 不把新闻、公告、政策、行业文本、RAG 或长期记忆引入 Phase 3。
 4. 不把持仓、现金、成本、盈亏或历史模型决策放入 Jev 输入。
-5. 不在 Phase 3 实现最终决策 LLM、仓位公式或 A/B/C/D 完整实验调度。
+5. 不在 Phase 3 实现最终决策 LLM、仓位公式或 A/B/C/D 完整实验调度；这些由 Phase 4 和 Phase 6 完成。
 6. 不宣称 Jev 概率已经过市场结果校准。
 
 ## 3. 职责边界
@@ -55,12 +55,12 @@ Python 确定性特征
 | 组件 | 负责 | 不负责 |
 |---|---|---|
 | Phase 2 Feature Engine | 指标、Decimal 量化、横截面排名、缺失原因、输入哈希 | 模糊状态判断、交易动作 |
-| Phase 3 Jev Provider | 有限标签状态概率、响应契约校验、调用审计 | 指标计算、权重、仓位、买卖动作 |
+| Phase 3 Jev Provider | 有限标签盈亏预测概率、响应契约校验、调用审计 | 真实标签、已实现盈亏、指标计算、权重、仓位、买卖动作 |
 | Phase 4 Decision LLM | 结合特征、Jev 概率和持仓输出离散动作 | 连续仓位、价格、订单数量 |
 | Position Sizer | 依据离散动作和约束确定仓位与数量 | 改写交易方向、调用模型 |
 | Backtest Engine | 消费 `TargetPositionBatch`、推进交易日、计算指标 | 直接调用 Jev 或理解 Jev Schema |
 
-“因子有效性”不属于 Jev 当前状态判断。因子是否有效必须由样本外统计、消融实验和稳定性检验决定。Phase 3 只保留 `factor_conflict`，用于描述当前输入特征是否相互支持，而不是声称某因子具备预测能力。
+“因子有效性”和因子配比均不属于 Jev。因子是否有效必须由样本外统计、消融实验和稳定性检验决定；第一版不实现任何动态因子权重接口。
 
 ## 4. 输入设计
 
@@ -75,6 +75,8 @@ Python 确定性特征
 | `decision_cutoff` | datetime | 必须带时区；所有输入均不得晚于该时间 |
 | `candidate_universe_id` | str | 冻结候选池标识 |
 | `candidate_universe_hash` | str | 64 位小写 SHA-256 |
+| `candidate_target_size` | int | 第一版固定默认值 80 |
+| `candidate_actual_size` | int | 本次冻结队列的实际合格数量，不得大于目标数量 |
 | `market_snapshot_hash` | str | Phase 2 冻结快照哈希 |
 | `feature_set_version` | str | 确定性特征集合版本 |
 | `state_schema_version` | Literal | 固定为 `jev-state-v1` |
@@ -88,7 +90,7 @@ Python 确定性特征
 
 ### 4.2 候选池级输入 `JevUniverseStateV1`
 
-候选池级输入完全来源于同一候选池快照和 Phase 2 特征的确定性聚合，不要求新增基准指数数据：
+候选池级输入完全来源于同一份最多 80 只股票的冻结候选队列快照和 Phase 2 特征的确定性聚合，不要求新增基准指数数据。`HELD_ONLY` 证券不参与候选池聚合，避免账户持仓改变全部证券共享的候选池状态：
 
 | 分类 | 字段 |
 |---|---|
@@ -110,7 +112,7 @@ decision_date + decision_cutoff + candidate_universe_hash
 
 ### 4.3 个股级输入 `JevSymbolStateV1`
 
-个股级输入由共同审计头、证券身份和 Phase 2 特征构成：
+个股级输入由共同审计头、证券身份和 Phase 2 特征构成。评估证券范围为冻结候选队列与当前持仓证券的并集；队列外持仓使用相同 Jev 个股契约。`HELD_ONLY` 只属于编排和 Phase 4 动作校验元数据，不序列化进 Jev 输入，避免同一证券因账户不同而产生不同概率：
 
 | 分类 | 字段 |
 |---|---|
@@ -133,7 +135,7 @@ decision_date + decision_cutoff + candidate_universe_hash
 - LLM 历史动作、Jev 历史响应和策略历史盈亏；
 - 目标仓位、订单数量、止盈止损比例和预期收益率。
 
-这些限制使 Jev 结果保持账户无关，可供多个实验组、组合和回测重复使用。
+这些限制使 Jev 结果保持账户无关，可供多个实验组、组合和回测重复使用。实际标签只在评估数据集中生成，永远不能回流到同日正式决策输入。
 
 ## 5. 问题与输出设计
 
@@ -147,28 +149,48 @@ decision_date + decision_cutoff + candidate_universe_hash
 
 | `question_id` | 版本 | 标签 | 含义 |
 |---|---|---|---|
-| `direction_regime` | `direction-regime-v1` | `UP`、`RANGE`、`DOWN` | 当前方向状态最符合哪类 |
-| `trend_persistence` | `trend-persistence-v1` | `CONTINUE`、`UNCERTAIN`、`REVERSE` | 当前趋势延续、模糊或反转倾向 |
-| `volume_confirmation` | `volume-confirmation-v1` | `CONFIRMED`、`AMBIGUOUS`、`REJECTED` | 量能对当前价格方向的支持程度 |
-| `overheat_risk` | `overheat-risk-v1` | `LOW`、`MEDIUM`、`HIGH` | 当前状态发生拥挤或短期回撤的风险级别 |
-| `factor_conflict` | `factor-conflict-v1` | `LOW`、`MEDIUM`、`HIGH` | 确定性特征之间的方向冲突程度 |
+| `next_session_pnl` | `next-session-pnl-v1` | `PROFIT`、`FLAT`、`LOSS` | 从 D+1 开盘到 D+1 收盘的净收益类别预测 |
+| `profitability_5d` | `profitability-5d-v1` | `PROFITABLE`、`FLAT`、`LOSS` | 从 D+1 开盘到第 5 个有效交易日收盘的净收益类别预测 |
+| `drawdown_risk_5d` | `drawdown-risk-5d-v1` | `LOW`、`MEDIUM`、`HIGH` | 未来 5 个有效交易日最大不利波动类别预测 |
+| `payoff_asymmetry_5d` | `payoff-asymmetry-5d-v1` | `UPSIDE_DOMINANT`、`BALANCED`、`DOWNSIDE_DOMINANT` | 未来 5 个有效交易日潜在上行与下行幅度关系预测 |
 | `data_sufficiency` | `data-sufficiency-v1` | `SUFFICIENT`、`LIMITED`、`INSUFFICIENT` | 输入是否足以支持本次状态判断 |
 
-第一版只使用 Jev `Choice`。不使用开放文本作为决策输入，不使用连续 `Score` 生成仓位或因子权重。
+第一版只使用 Jev `Choice`。不使用开放文本作为决策输入，不使用连续 `Score` 生成收益率、仓位或因子权重。
 
-### 5.3 标准输出 `JevQuestionResultV1`
+### 5.3 真实标签口径
+
+真实标签由代码在评估阶段生成，Jev 不参与计算。设 `entry_open` 为 D+1 可成交开盘价，`round_trip_cost_v1` 为实验冻结的双边费用与滑点比例：
+
+```text
+net_return_h = close(D+h) / entry_open - 1 - round_trip_cost_v1
+mae_5d = min(0, min(low(D+1 ... D+5) / entry_open - 1))
+mfe_5d = max(0, max(high(D+1 ... D+5) / entry_open - 1))
+```
+
+标签阈值固定如下：
+
+| 问题 | 标签生成规则 |
+|---|---|
+| `next_session_pnl` | `PROFIT`：`net_return_1d > 0.002`；`FLAT`：`-0.002 <= net_return_1d <= 0.002`；`LOSS`：`net_return_1d < -0.002` |
+| `profitability_5d` | `PROFITABLE`：`net_return_5d > 0.005`；`FLAT`：`-0.005 <= net_return_5d <= 0.005`；`LOSS`：`net_return_5d < -0.005` |
+| `drawdown_risk_5d` | `LOW`：`abs(mae_5d) <= 0.02`；`MEDIUM`：`0.02 < abs(mae_5d) <= 0.05`；`HIGH`：`abs(mae_5d) > 0.05` |
+| `payoff_asymmetry_5d` | `UPSIDE_DOMINANT`：`mfe_5d >= 1.5 × abs(mae_5d)`；`DOWNSIDE_DOMINANT`：`abs(mae_5d) >= 1.5 × mfe_5d`；其余为 `BALANCED`；二者同为 0 时为 `BALANCED` |
+
+停牌、无 D+1 可成交开盘、未来 5 个有效交易日不完整或复权口径不一致时，真实标签状态为 `LABEL_UNAVAILABLE`，不得用零收益替代。上述定义统一使用 `pnl-label-criteria-v1`；任何阈值或费用口径变化都必须提升版本。
+
+### 5.4 标准输出 `JevQuestionResultV1`
 
 ```json
 {
-  "question_id": "trend_persistence",
-  "question_version": "trend-persistence-v1",
-  "criteria_version": "trend-persistence-criteria-v1",
+  "question_id": "profitability_5d",
+  "question_version": "profitability-5d-v1",
+  "criteria_version": "pnl-label-criteria-v1",
   "distribution": {
-    "CONTINUE": "0.610000",
-    "UNCERTAIN": "0.270000",
-    "REVERSE": "0.120000"
+    "PROFITABLE": "0.580000",
+    "FLAT": "0.240000",
+    "LOSS": "0.180000"
   },
-  "selected_label": "CONTINUE"
+  "selected_label": "PROFITABLE"
 }
 ```
 
@@ -181,17 +203,17 @@ decision_date + decision_cutoff + candidate_universe_hash
 5. 并列最高概率时按问题定义中的标签顺序确定，保证重放确定性。
 6. 任何缺标签、未知标签、NaN、Infinity、负值或总和越界均使整个响应成为 `CONTRACT_INVALID`，不得保存部分正式概率。
 
-### 5.4 概率语义
+### 5.5 概率语义
 
 允许的解释：
 
-> “在输入 Schema、问题标准、Provider 和模型版本固定时，Jev 将当前个股状态的 0.61 概率质量分配给 `CONTINUE`。”
+> “在输入 Schema、问题标准、Provider 和模型版本固定时，Jev 将 0.58 的概率质量分配给未来 5 个交易日的 `PROFITABLE` 类别。”
 
 禁止的解释：
 
-> “该股票下一交易日有 61% 概率上涨。”
+> “该股票未来 5 个交易日真实盈利概率就是 58%。”
 
-两者只有在后续使用带时间标签的样本外校准证明可映射时才可能建立统计关系。Phase 3 数据模型不预设这种关系。
+后一句只有在足量样本外数据上的可靠性曲线、Brier Score 和 ECE 均支持时才成立。在校准前，报告必须使用“Jev 预测概率”，不能使用“真实盈利概率”。
 
 ## 6. Provider 接口
 
@@ -229,7 +251,7 @@ class JevSymbolStateProvider(Protocol):
 | 条件 | 状态 | 概率字段 | 后续行为 |
 |---|---|---|---|
 | 必要输入不足 | `DATA_UNAVAILABLE` | 不存在 | 不调用 Provider |
-| API Key 缺失、无权限、超时、限流、网络失败 | `PROVIDER_UNAVAILABLE` | 不存在 | B/C 组记录失败，不跨组降级 |
+| API Key 缺失、无权限、超时、限流、网络失败 | `PROVIDER_UNAVAILABLE` | 不存在 | C/D 组记录失败，不跨组降级 |
 | 未知标签、缺标签、非法概率、Schema 不匹配 | `CONTRACT_INVALID` | 不存在 | 保存响应哈希和错误码，不保存正式概率 |
 | 完整有效响应 | `AVAILABLE` | 完整分布 | 允许进入下游实验 |
 
@@ -252,26 +274,19 @@ class JevSymbolStateProvider(Protocol):
 
 ## 9. 下游使用方式
 
-### 9.1 B 组
+### 9.1 C 组：第一版主链
 
-Phase 4 LLM 同时读取确定性特征、候选池 Jev 概率、个股 Jev 概率和持仓状态，输出 `ENTER/KEEP/EXIT/AVOID`。Jev 概率只是输入证据，不强制对应某个动作。
+C 组是第一版的主要产品链和最高优先级。Phase 4 LLM 同时读取确定性特征、候选池风险概率、个股盈亏预测概率和持仓状态，输出 `ENTER/KEEP/EXIT/AVOID`。Jev 概率只是预测证据，不强制对应某个动作；LLM 不得改写或重新计算概率。
 
-### 9.2 C 组
+### 9.2 A/B/D 对照组
 
-C 组不让 Jev 直接生成动作，而由版本化确定性映射将概率转为离散动作。映射器可以读取 `direction_regime`、`trend_persistence`、`overheat_risk` 和当前是否持仓，但阈值必须在 Phase 6 实验规范中单独冻结，不能在 Phase 3 Provider 中硬编码。
+| 组别 | 链路 | 用途 |
+|---|---|---|
+| A | 确定性规则 → 仓位引擎 | 纯规则基线 |
+| B | 确定性特征 → LLM → 仓位引擎 | 测量无 Jev 时的 LLM 表现 |
+| D | 确定性特征 → Jev 盈亏概率 → 确定性动作映射 → 仓位引擎 | 测量移除 LLM 后的表现 |
 
-### 9.3 动态因子权重
-
-如未来实验需要动态权重，Jev 只提供候选池状态概率，Python 使用预定义 Profile 进行确定性混合：
-
-```text
-final_weights =
-    P(RISK_ON)  × risk_on_profile
-  + P(NEUTRAL)  × neutral_profile
-  + P(RISK_OFF) × risk_off_profile
-```
-
-Profile、映射公式和版本均由代码管理。Jev 不返回任何 Profile 或连续权重。
+D 组映射器可以读取 `next_session_pnl`、`profitability_5d`、`drawdown_risk_5d`、`payoff_asymmetry_5d` 和当前是否持仓，但阈值必须在 Phase 6 实验规范中冻结，不能在 Phase 3 Provider 中硬编码。第一版不存在动态因子权重、权重 Profile 或概率到权重的映射。
 
 ## 10. 兼容与迁移
 
@@ -294,6 +309,8 @@ Profile、映射公式和版本均由代码管理。Jev 不返回任何 Profile 
 | 候选池调用去重 | 同一正式键最多 1 次成功 Provider 调用 | 并发幂等单元测试 | 必须 |
 | 个股隔离 | 每个结果只对应 1 个证券和 1 个输入哈希 | Entity/Repository 测试 | 必须 |
 | Point-in-Time | 输入字段时间全部不晚于 `decision_cutoff` | 时间旅行失败测试 | 必须 |
+| 默认队列规模 | 目标 80，只保留实际合格证券 | 候选池契约测试 | 必须 |
+| 队列外持仓 | 全部进入评估且不能 `ENTER` | 持仓移出队列集成测试 | 必须 |
 | 禁止输入 | 持仓、现金、新闻、未来标签字段为 0 | Schema 字段扫描 | 必须 |
 | 概率完整性 | 标签全集一致，概率和在契约容差内为 1 | Provider 契约测试 | 必须 |
 | 非法响应 | 统一为 `CONTRACT_INVALID`，正式概率 0 条 | 失败响应参数化测试 | 必须 |
@@ -302,6 +319,9 @@ Profile、映射公式和版本均由代码管理。Jev 不返回任何 Profile 
 | 版本审计 | 规定的版本和哈希字段全部非空 | Repository 测试 | 必须 |
 | Secret 泄漏 | API Key 和认证头匹配数为 0 | 日志、数据库和 Git 扫描 | 必须 |
 | 离线重放 | 外部调用为 0，结果逐字段相同 | Replay 集成测试 | 必须 |
+| 真实标签隔离 | D 日正式决策读取未来标签 0 次 | 时间旅行集成测试 | 必须 |
+| 标签公式 | 固定行情得到逐字段固定标签 | Decimal 单元测试 | 必须 |
+| C 组优先级 | C 组所需 Jev 契约和真实标签先于 A/B/D 专属能力完成 | 阶段任务与验收记录 | 必须 |
 | 回测契约 | `backtest-contract-v1` 公共 Entity 无变化 | API 快照测试 | 必须 |
 
 真实 Jev 调用只作为显式启用的 Live Test，要求有效 `TYPESAFE_API_KEY` 和账户模型权限；默认 CI 不访问网络，也不因缺少凭据失败。
@@ -314,7 +334,9 @@ Profile、映射公式和版本均由代码管理。Jev 不返回任何 Profile 
 | Provider 或模型版本漂移 | 同状态输出变化 | 保存全部版本和哈希，禁止覆盖历史结果 |
 | 问题文字轻微变化导致分布漂移 | 跨版本不可直接比较 | 每次修改提升 `question_version` 或 `criteria_version` |
 | 候选池级状态被每票重复调用 | 成本上升且结果可能不一致 | 候选池正式键唯一约束与调用去重 |
-| 把状态概率误读为涨跌概率 | 形成虚假置信度 | Schema 命名、文档、报告均禁止使用 `up_probability` |
+| 把未校准预测当成真实概率 | 形成虚假置信度 | 报告明确标记预测概率并输出可靠性曲线、Brier Score 和 ECE |
+| 未来真实标签泄漏到输入 | 回测收益虚高 | 标签表与正式输入分域，Point-in-Time 测试强制失败 |
+| 80 只队列发生幸存者偏差 | 历史结果不可相信 | 保存每期队列版本、成员、生效时间和哈希，禁止回写 |
 | 旧语义 Provider 与新 Provider 混用 | 审计含义不一致 | 不同 Protocol、表记录类型和服务入口 |
 
 ## 13. 文件边界
@@ -338,11 +360,13 @@ Phase 3 不修改 `src/fkqt_jevinvestor/backtest/`、`tests/backtest/` 和已冻
 
 Phase 3 只有在以下条件全部满足时才完成：
 
-1. R7、R8、R10、R12、R14、R21、R23、R24、R26、R29、R33、R37—R41 均有代码或测试证据。
+1. R7、R8、R10、R12、R14、R21、R23、R24、R26、R27、R29、R33、R37—R43 均有代码或测试证据。
 2. 候选池级与个股级输入、问题、结果和失败状态均为版本化领域类型。
 3. 正式结果完整保存概率分布、版本、哈希和调用状态。
 4. Provider 不可用、输入不足和响应无效均不会产生伪造概率。
 5. 同一候选池正式键不会按证券重复调用。
 6. 默认离线 CI 不需要 API Key；显式 Live Test 能验证真实 SDK 契约。
 7. 回测公共契约无变化。
-8. 阶段最终验收完成一次完整离线测试、Ruff、Pyright 和 Alembic 升降级。
+8. 预测问题和代码生成的实际标签使用同一 `criteria_version`，且正式决策无法访问未来标签。
+9. C 组所需的 Jev 输出契约优先完成；A/B/D 不得延迟 C 组主链交付。
+10. 阶段最终验收完成一次完整离线测试、Ruff、Pyright 和 Alembic 升降级。
