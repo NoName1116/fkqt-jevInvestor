@@ -184,6 +184,20 @@ class MarketSnapshotRepository:
             )
             if snapshot is None:
                 raise MarketSnapshotNotFound("MARKET_SNAPSHOT_NOT_FOUND")
+            return await self._load_record(session, snapshot)
+
+    async def load_run_inputs_by_id(self, snapshot_id: str) -> StoredMarketRunInputs:
+        async with self._session_factory() as session:
+            snapshot = await session.get(MarketSnapshotRecord, snapshot_id)
+            if snapshot is None:
+                raise MarketSnapshotNotFound("MARKET_SNAPSHOT_NOT_FOUND")
+            return await self._load_record(session, snapshot)
+
+    @staticmethod
+    async def _load_record(
+        session: AsyncSession,
+        snapshot: MarketSnapshotRecord,
+    ) -> StoredMarketRunInputs:
             records = tuple(
                 await session.scalars(
                     select(MarketFeatureRecord)

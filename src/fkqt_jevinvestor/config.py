@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,14 @@ class Settings(BaseSettings):
         validation_alias="TYPESAFE_API_KEY",
     )
     typesafe_model: str = Field(default="jev-latest", validation_alias="TYPESAFE_MODEL")
+    fkqt_manifest_bundle_root: Path | None = Field(
+        default=None,
+        validation_alias="FKQT_MANIFEST_BUNDLE_ROOT",
+    )
+    market_snapshot_root: Path = Field(
+        default=Path("data/snapshots"),
+        validation_alias="JEV_INVESTOR_MARKET_SNAPSHOT_ROOT",
+    )
 
 
 @lru_cache
