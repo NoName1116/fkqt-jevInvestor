@@ -125,7 +125,7 @@ class TargetPositionBatch(BaseModel):
     input_hash: str = Field(min_length=64, max_length=64)
 
 
-class ReplayDay(BaseModel):
+class DecisionReplayDay(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     decision_date: date
@@ -135,7 +135,15 @@ class ReplayDay(BaseModel):
     market_snapshot_hash: str = Field(min_length=64, max_length=64)
     feature_snapshot_hash: str = Field(min_length=64, max_length=64)
     features: Mapping[str, MarketFeatureSnapshot]
+
+
+class ReplayDay(DecisionReplayDay):
     execution_market: Mapping[str, MarketExecutionSnapshot]
+
+    def decision_view(self) -> DecisionReplayDay:
+        return DecisionReplayDay.model_validate(
+            self.model_dump(exclude={"execution_market"})
+        )
 
 
 class BacktestConfig(BaseModel):
@@ -227,7 +235,7 @@ class TargetProvider(Protocol):
     async def build_targets(
         self,
         config: BacktestConfig,
-        day: ReplayDay,
+        day: DecisionReplayDay,
         portfolio: PortfolioState,
     ) -> TargetPositionBatch: ...
 
@@ -254,7 +262,7 @@ class ExecutionPort(Protocol):
 5. 校验 `decision_date < planned_execution_date`。
 6. 校验 `decision_cutoff.date() == decision_date`。
 7. 校验所有特征 `as_of <= decision_cutoff`。
-8. 调用一次 `TargetProvider.build_targets()`。
+8. 调用 `ReplayDay.decision_view()`，把不含 D+1 `execution_market` 的 `DecisionReplayDay` 传给一次 `TargetProvider.build_targets()`。
 9. 校验目标批次日期、实验组和 `sizing_version` 与配置一致。
 10. 调用一次 `ExecutionPort.execute()`，只传入 D+1 `execution_market`。
 11. 使用实际成交后组合状态生成 `DailyBacktestRecord`。
