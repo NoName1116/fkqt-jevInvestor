@@ -1,8 +1,8 @@
-# AI Signal Lab 当前任务计划
+# fkqt-jevInvestor 当前任务计划
 
 日期：2026-09-21
 
-当前阶段：独立仓库设计已确认，迁移与 Phase 2 计划等待用户审阅
+当前阶段：独立仓库迁移已完成，下一步是 Phase 2 Task 1 固化回测协作契约
 
 | 步骤 | 内容 | 输入 | 输出 | 状态 |
 |---|---|---|---|---|
@@ -23,8 +23,8 @@
 | P15 | 用户审阅独立仓库设计 | 书面设计 | 用户明确批准 | 已完成 |
 | P16 | 编写迁移与 Phase 2 实施计划 | 已批准设计 | 两份逐文件、逐测试、逐提交计划 | 已完成 |
 | P17 | 冻结回测 Contributor 契约 | 用户指定沙耶负责回测 | Entity、Protocol、文件所有权和验收规范 | 已完成 |
-| P18 | 用户审阅实施计划并选择执行方式 | 两份实施计划 | 批准或修改意见 | 待开始 |
-| P19 | 创建公开 GitHub 仓库并迁移 | 批准后的迁移计划 | 独立仓库与 Phase 0/1 等价基线 | 进行中 |
+| P18 | 用户审阅实施计划并选择执行方式 | 两份实施计划 | 批准或修改意见 | 已完成 |
+| P19 | 创建公开 GitHub 仓库并迁移 | 批准后的迁移计划 | 独立仓库与 Phase 0/1 等价基线 | 已完成 |
 | P20 | 冻结 `backtest-contract-v1` | Phase 2 Task 1 | 沙耶可并行开发的稳定标签 | 待开始 |
 
 ## Phase 0 验收记录
@@ -54,7 +54,7 @@
 
 ## 当前停止点
 
-Phase 1 已在隔离工作树 `C:\Users\1\Desktop\FKQTPRO\ai-signal-phase0` 完成。独立仓库设计与 Native 执行已批准，公开仓库创建和 Phase 0/1 迁移正在执行。独立仓库迁移完成且 Phase 2 Task 1 的 `backtest-contract-v1` 标签推送后，沙耶即可通过 Fork + Pull Request 开始回测开发。
+Phase 0/1 已等价迁移到 `C:\Users\1\Desktop\FKQTPRO\fkqt-jevInvestor`。迁移验收结果为 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 79 passed/1 deselected，Alembic 往返后为 `0003_phase1_audit_snapshot (head)`。下一步完成 Phase 2 Task 1 并推送 `backtest-contract-v1` 标签后，沙耶可通过 Fork + Pull Request 开始回测开发。
 # Phase 1 Task 8 最终状态（2026-09-21）
 
 - 状态：完成。

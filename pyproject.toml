@@ -46,3 +46,5 @@ target-version = "py312"
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"

@@ -107,3 +107,13 @@
 - 保存 SignalBatch 时原子写入 `DECISION_INPUT` 持仓明细快照及哈希，并通过外键关联批次。
 - 最终离线验收：完整运行得到 `74 passed, 1 failed, 1 deselected`；唯一失败是旧测试使用错日行情，修正测试数据后该失败项单独重跑 `1 passed`。因此有效结果为 75 个离线测试全部通过、1 个 live 测试未运行。
 - Ruff：`All checks passed!`。Pyright 显式使用项目解释器：`0 errors, 0 warnings, 0 informations`。Alembic：`0003_phase1_audit_snapshot (head)`。
+
+## 独立仓库迁移验收（2026-09-21）
+
+- 源基线提交：`4210322`、`5e43ea8`、`7ba8221`。
+- 迁移提交：`1ff159a`、`5894591`、`dc262ae`、`0cef947`、`0111c9f`。
+- Ruff：`All checks passed!`。
+- Pyright：`0 errors, 0 warnings, 0 informations`。
+- Pytest：`79 passed, 1 deselected, 2 warnings`；live 测试未运行。
+- Alembic：`upgrade head → downgrade base → upgrade head` 完成，最终为 `0003_phase1_audit_snapshot (head)`。
+- 两日 Fixture：现金 `795834.7700`，总资产 `999834.7700`，卖出佣金 `1.2000`，印花税 `2.0000`，买入佣金 `60.0300`，持仓数量 `400/20000`，重复成交 `0`。
