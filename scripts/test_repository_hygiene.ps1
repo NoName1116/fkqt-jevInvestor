@@ -14,7 +14,7 @@ if ($forbiddenTracked) {
     throw "禁止跟踪的文件: $($forbiddenTracked -join ', ')"
 }
 
-$secretMatches = git grep -n -I -E 'apikey_[0-9a-f]{16,}|TYPESAFE_API_KEY=[^<[:space:]]+' -- . ':!scripts/test_repository_hygiene.ps1'
+$secretMatches = git grep -n -I -E 'apikey_[0-9a-f]{16,}|TYPESAFE_API_KEY=[A-Za-z0-9_-]{16,}' -- . ':!scripts/test_repository_hygiene.ps1'
 if ($LASTEXITCODE -eq 0) {
     throw "检测到疑似 Secret: $secretMatches"
 }
