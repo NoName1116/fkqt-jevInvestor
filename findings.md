@@ -185,3 +185,6 @@
 5. 仓位版本固定为 `position-sizing-v1`，使用波动率和流动性确定目标，并应用 10% 单票、80% 总仓位与 20% 最低现金约束；决策前已超限时只阻止新增风险，不绕过 LLM 自动清仓。
 6. 2026-09-21 复核官方模型列表确认 `deepseek-chat` 已于 2026-07-24 退役；第一版默认模型必须使用当前有效的 `deepseek-flash`，并保存实际 model ID。
 7. 外部资料：https://api-docs.deepseek.com/guides/json_mode/、https://api-docs.deepseek.com/api/create-response/、https://api-docs.deepseek.com/quick_start/pricing/、https://github.com/openai/openai-python/blob/main/helpers.md。
+8. 用户明确要求优先使用最强的 DeepSeek 4.1 系列能力；Phase 4 因此冻结默认 `deepseek-flash` 与 `reasoning_effort=high`，并保留模型配置和实际调用模型审计字段。
+9. 现有 `ExperimentArm` 的 A/B/C/D 名称与 R26 含义相反；Phase 4 使用纯加法加入规范枚举，保留旧成员供 Contributor 代码读取，新记录只写规范名。
+10. 现有 Phase 1 Signal 表强制要求 `confidence`，但 LLM 不得输出或合成数值置信度；兼容 Adapter 固定写 `Decimal(0)` 表示 `NOT_PROVIDED`，正式 Decision/Sizing 契约不包含该字段。

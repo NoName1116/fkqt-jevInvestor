@@ -1,6 +1,6 @@
 # fkqt-jevInvestor 需求基线
 
-版本：0.4
+版本：0.5
 
 日期：2026-09-21
 
@@ -53,6 +53,8 @@
 - **R41 因子权重删除**：第一版不实现动态因子权重、权重 Profile 或概率到权重的映射；Jev 和最终决策 LLM 均不得生成连续因子权重。重新引入该能力必须新增需求并独立评审。
 - **R42 盈亏标签归属**：用于校准 Jev 的实际盈亏、最大不利波动和盈亏不对称标签必须由代码从 D+1 起的冻结执行行情生成；Jev 不得参与标签计算。正式前向决策不得读取这些未来标签。
 - **R43 队列外持仓**：正式决策证券集合为“冻结候选队列与当前持仓证券的并集”。不在候选队列但仍有持仓的证券标记为 `HELD_ONLY`，不计入 `candidate_limit`，只允许最终 LLM 输出 `KEEP`、`EXIT` 或 `NO_SIGNAL`；系统不得因证券掉出候选队列而静默遗漏或自动清仓。
+- **R44 DeepSeek 首发模型**：Phase 4 首个真实决策 Provider 使用 OpenAI-compatible DeepSeek API，默认模型 ID 为当前 DeepSeek V4.1 Flash 对应的 `deepseek-flash`，默认 `reasoning_effort=high`；实际 Base URL、模型和版本必须配置化并写入审计，不得在业务层硬编码。旧 `deepseek-chat` 已退役，不得作为默认值。
+- **R45 实验组规范命名**：回测和前向记录使用 `A_RULE`、`B_LLM`、`C_JEV_LLM`、`D_JEV_DIRECT` 对应 R26 四条链路。已冻结契约中的旧枚举名仅为向后兼容保留，新记录不得继续使用旧命名；修复必须是加法变更，不删除 Contributor 可能仍在读取的旧成员。
 
 ## 明确非目标
 

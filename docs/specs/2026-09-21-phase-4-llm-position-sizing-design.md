@@ -2,9 +2,9 @@
 
 日期：2026-09-21
 
-状态：待书面审阅
+状态：用户已确认
 
-需求映射：R3、R4、R7、R9、R12、R15、R16、R18—R29、R32—R36、R40—R43
+需求映射：R3、R4、R7、R9、R12、R15、R16、R18—R29、R32—R36、R40—R45
 
 上游阶段：Phase 3 Jev 行情盈亏概率层
 
@@ -213,7 +213,8 @@ class DecisionLlmProvider(Protocol):
 
 - `DEEPSEEK_API_KEY`：无默认值，使用 `SecretStr`；
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`；
-- `DEEPSEEK_MODEL`：默认 `deepseek-flash`；旧 `deepseek-chat` 已退役，不得作为默认值；
+- `DEEPSEEK_MODEL`：默认 `deepseek-flash`，对应 DeepSeek V4.1 Flash；旧 `deepseek-chat` 已退役，不得作为默认值；
+- `DEEPSEEK_REASONING_EFFORT`：默认 `high`；
 - `DEEPSEEK_TIMEOUT_SECONDS`：默认 `30`，必须大于 0。
 
 Provider 不读取全局环境变量，不保存 Secret，不记录完整异常正文。SDK 异常统一抛出 `ProviderUnavailableError`；响应契约异常抛出携带清理后响应哈希的 `ProviderContractError`。
@@ -326,6 +327,8 @@ Phase 4 只产出目标权重。D+1 实际数量仍由现有执行引擎使用�
 
 `DecisionSignalBatchV1` 是正式运行输出，字段包含 portfolio、决策日、执行日、Sizing 版本、候选证券、逐票目标、现金目标和输入哈希。Phase 1 的 `FixtureSignalBatch` 保持不变，只作为现有 Repository/Execution 的内部兼容输入；Phase 4 Adapter 必须逐字段转换并验证哈希，不允许通过本地 Fixture HTTP 路由提交正式信号。
 
+现有 `FixtureSignal` 和 `ai_signal_signal` 要求非空 `confidence`。Phase 4 兼容 Adapter 固定写入 `Decimal(0)` 作为 `NOT_PROVIDED` 哨兵值，正式 Decision/Sizing 表不包含 confidence。该字段不得进入执行逻辑、绩效归因或模型比较；禁止根据 thesis 长度、Jev 概率或模型措辞合成置信度。
+
 ## 12. C 组服务
 
 `CGroupDecisionService.evaluate_run()` 接收：
@@ -359,7 +362,7 @@ Phase 4 提供 `FrozenCGroupTargetProvider`，实现已冻结的 `TargetProvider
 
 正式模型评估与回测重放分离：先由 C 组服务创建不可变决策数据集，再由回测引擎重放该数据集。这样同一次回测不会因模型服务状态或模型版本漂移而变化。
 
-回测 Contributor 的 `backtest-contract-v1` 不修改。
+回测 `ExperimentArm` 当前仍保留历史旧命名，与 R26 的规范 A/B/C/D 含义不一致。Phase 4 以向后兼容方式新增 `A_RULE/B_LLM/C_JEV_LLM/D_JEV_DIRECT`，不删除旧成员、不修改 Protocol 或 Entity 字段；新 C 组记录只使用 `C_JEV_LLM`。这是独立提交的加法契约修复，Contributor 现有代码仍可导入旧成员。
 
 ## 14. 持久化设计
 
