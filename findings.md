@@ -175,3 +175,13 @@
 26. Evaluation 主记录现保存当前 owner token 和租约截止时间；过期接管、成功提交和失败提交都使用数据库条件 `UPDATE` 作为 CAS 裁决。两个 worker 并发抢占时只有一个获得新 Attempt，租约已过期的旧 owner 无法同时写入终态。
 27. 第二轮修复定点验证：State/Provider/Repository 受影响测试 44 项通过；Repository、C 组 Service 与 Phase 3 迁移回归 19 项通过；新增过期租约并发测试 3 项通过。Ruff 全通过，Pyright 0 errors/0 warnings。
 28. 最终复核补充发现 Universe coverage 可能字段齐全但数值矛盾；现已要求计数非负、计数和等于候选实际数量、覆盖率处于 0—1 且与计数一致、缺失数量与缺失原因相互一致，空候选池只能使用 `coverage_ratio=None`。相关 State/Builder/Provider/Service 定点回归 57 项通过。
+
+## Phase 4 LLM 离散动作与确定性仓位设计（2026-09-21）
+
+1. 用户确认首个真实决策 LLM Provider 使用 DeepSeek；业务边界保持 OpenAI-compatible，Provider Base URL 与模型可替换。
+2. DeepSeek 官方 JSON Output 要求请求显式声明 JSON，官方 Responses API 还支持 JSON Schema；本系统仍以本地 Pydantic 作为最终业务契约裁决，避免把传输格式合法误当作动作合法。
+3. OpenAI 官方 Python SDK 提供 Pydantic Structured Outputs parsing；第一版直接使用异步兼容 Client，不引入 LangChain、PydanticAI 或 Instructor 的自动 Agent/修复层。
+4. 正式动作逐证券独立调用，模型只输出 `ENTER/KEEP/EXIT/AVOID`；`NO_SIGNAL` 只由系统失败归一化产生。
+5. 仓位版本固定为 `position-sizing-v1`，使用波动率和流动性确定目标，并应用 10% 单票、80% 总仓位与 20% 最低现金约束；决策前已超限时只阻止新增风险，不绕过 LLM 自动清仓。
+6. 2026-09-21 复核官方模型列表确认 `deepseek-chat` 已于 2026-07-24 退役；第一版默认模型必须使用当前有效的 `deepseek-flash`，并保存实际 model ID。
+7. 外部资料：https://api-docs.deepseek.com/guides/json_mode/、https://api-docs.deepseek.com/api/create-response/、https://api-docs.deepseek.com/quick_start/pricing/、https://github.com/openai/openai-python/blob/main/helpers.md。
