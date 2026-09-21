@@ -287,3 +287,95 @@ class MarketFeatureRecord(Base):
     missing_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_snapshot_hash: Mapped[str] = mapped_column(String(64))
     feature_snapshot_hash: Mapped[str] = mapped_column(String(64))
+
+
+class JevEvaluationRecord(Base):
+    __tablename__ = "ai_signal_jev_evaluation"
+    __table_args__ = (
+        UniqueConstraint("formal_key", name="uq_ai_signal_jev_evaluation_formal_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    formal_key: Mapped[str] = mapped_column(String(64))
+    scope: Mapped[str] = mapped_column(String(16))
+    symbol: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    decision_date: Mapped[date] = mapped_column(Date)
+    decision_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    state_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    provider_name: Mapped[str] = mapped_column(String(64))
+    provider_version: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str] = mapped_column(String(128))
+    state_schema_version: Mapped[str] = mapped_column(String(64))
+    question_set_version: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    latest_attempt_sequence: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class JevAttemptRecord(Base):
+    __tablename__ = "ai_signal_jev_attempt"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_id",
+            "sequence",
+            name="uq_ai_signal_jev_attempt_sequence",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id", ondelete="CASCADE")
+    )
+    run_id: Mapped[str] = mapped_column(String(36))
+    sequence: Mapped[int] = mapped_column(Integer)
+    provider_name: Mapped[str] = mapped_column(String(64))
+    provider_version: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str] = mapped_column(String(128))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32))
+    raw_response_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class JevQuestionResultRecord(Base):
+    __tablename__ = "ai_signal_jev_question_result"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_id",
+            "question_id",
+            name="uq_ai_signal_jev_question_result_question",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id", ondelete="CASCADE")
+    )
+    question_id: Mapped[str] = mapped_column(String(64))
+    question_version: Mapped[str] = mapped_column(String(64))
+    criteria_version: Mapped[str] = mapped_column(String(64))
+    label_order_json: Mapped[list[str]] = mapped_column(JSON)
+    selected_label: Mapped[str] = mapped_column(String(64))
+    distribution_json: Mapped[dict[str, str]] = mapped_column(JSON)
+
+
+class JevRunLinkRecord(Base):
+    __tablename__ = "ai_signal_jev_run_link"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "evaluation_id",
+            name="uq_ai_signal_jev_run_link_run_evaluation",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(36))
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id", ondelete="CASCADE")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
