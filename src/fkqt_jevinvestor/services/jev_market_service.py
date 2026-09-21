@@ -1,6 +1,6 @@
 import time
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,6 +45,11 @@ class JevRunEvaluationV1(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     run_id: UUID
+    decision_date: date
+    decision_cutoff: datetime
+    planned_execution_date: date
+    candidate_universe_hash: str = Field(min_length=64, max_length=64)
+    market_snapshot_hash: str = Field(min_length=64, max_length=64)
     universe: JevEvaluationV1
     symbols: Mapping[str, JevEvaluationV1]
 
@@ -92,6 +97,11 @@ class JevMarketEvaluationService:
             )
         return JevRunEvaluationV1(
             run_id=command.run_id,
+            decision_date=command.snapshot.decision_date,
+            decision_cutoff=command.snapshot.decision_cutoff,
+            planned_execution_date=command.snapshot.next_trade_date,
+            candidate_universe_hash=command.snapshot.universe_snapshot_hash,
+            market_snapshot_hash=command.snapshot.content_hash,
             universe=universe,
             symbols=symbol_results,
         )

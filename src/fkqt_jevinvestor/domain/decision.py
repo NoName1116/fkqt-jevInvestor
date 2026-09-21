@@ -64,7 +64,7 @@ class DecisionInputV1(BaseModel):
     candidate_universe_id: str = Field(min_length=1)
     candidate_universe_hash: str = Field(min_length=64, max_length=64)
     market_snapshot_hash: str = Field(min_length=64, max_length=64)
-    feature_snapshot: MarketFeatureSnapshot
+    feature_snapshot: MarketFeatureSnapshot | None
     symbol: str = Field(min_length=1)
     membership: DecisionMembership
     universe_jev: JevEvaluationV1
@@ -85,16 +85,17 @@ class DecisionInputV1(BaseModel):
             raise ValueError("DECISION_CUTOFF_DATE_MISMATCH")
         if self.planned_execution_date <= self.decision_date:
             raise ValueError("DECISION_EXECUTION_DATE_INVALID")
-        if (
-            self.feature_snapshot.symbol != self.symbol
-            or self.feature_snapshot.decision_date != self.decision_date
-        ):
-            raise ValueError("DECISION_FEATURE_IDENTITY_MISMATCH")
-        if any(
-            feature.as_of > self.decision_cutoff
-            for feature in self.feature_snapshot.values.values()
-        ):
-            raise ValueError("DECISION_POINT_IN_TIME_VIOLATION")
+        if self.feature_snapshot is not None:
+            if (
+                self.feature_snapshot.symbol != self.symbol
+                or self.feature_snapshot.decision_date != self.decision_date
+            ):
+                raise ValueError("DECISION_FEATURE_IDENTITY_MISMATCH")
+            if any(
+                feature.as_of > self.decision_cutoff
+                for feature in self.feature_snapshot.values.values()
+            ):
+                raise ValueError("DECISION_POINT_IN_TIME_VIOLATION")
         if (
             self.universe_jev.finished_at > self.decision_cutoff
             or self.symbol_jev.finished_at > self.decision_cutoff
@@ -102,10 +103,8 @@ class DecisionInputV1(BaseModel):
             raise ValueError("DECISION_POINT_IN_TIME_VIOLATION")
         if (
             self.universe_jev.scope is not JevScope.UNIVERSE
-            or self.universe_jev.status is not JevEvaluationStatus.AVAILABLE
             or self.symbol_jev.scope is not JevScope.SYMBOL
             or self.symbol_jev.symbol != self.symbol
-            or self.symbol_jev.status is not JevEvaluationStatus.AVAILABLE
         ):
             raise ValueError("DECISION_JEV_EVIDENCE_INVALID")
         if self.position is not None and self.position.symbol != self.symbol:

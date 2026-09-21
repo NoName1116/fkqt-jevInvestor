@@ -113,8 +113,17 @@ class DecisionEvaluationRepository:
                         return await self._create_claim(
                             session, run_id, command, input_json
                         )
+                    already_linked = await self._has_run_link(
+                        session, run_id, record.id
+                    )
                     await self._ensure_run_link(session, run_id, record.id)
-                    if record.status == DecisionEvaluationStatus.AVAILABLE.value:
+                    if (
+                        record.status != DecisionEvaluationStatus.IN_PROGRESS.value
+                        and (
+                            record.status == DecisionEvaluationStatus.AVAILABLE.value
+                            or already_linked
+                        )
+                    ):
                         return DecisionClaim(
                             status=ClaimStatus.COMPLETE,
                             evaluation_id=record.id,
@@ -437,6 +446,20 @@ class DecisionEvaluationRepository:
                     created_at=self._clock(),
                 )
             )
+
+    @staticmethod
+    async def _has_run_link(
+        session: AsyncSession,
+        run_id: UUID,
+        evaluation_id: str,
+    ) -> bool:
+        existing = await session.scalar(
+            select(DecisionRunLinkRecord.id).where(
+                DecisionRunLinkRecord.run_id == str(run_id),
+                DecisionRunLinkRecord.evaluation_id == evaluation_id,
+            )
+        )
+        return existing is not None
 
     async def _claim_after_competition(
         self,
