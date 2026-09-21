@@ -7,6 +7,8 @@ import pytest
 from typesafe_sdk import Answer, ChoiceAnswer, SystemOneResponse, Usage
 
 from fkqt_jevinvestor.domain.jev_market import (
+    JEV_SYMBOL_FEATURE_FIELDS,
+    JEV_UNIVERSE_METRIC_FIELDS,
     JevEvaluationCommand,
     JevEvaluationStatus,
     JevScope,
@@ -66,15 +68,32 @@ def _command(scope: JevScope = JevScope.SYMBOL) -> JevEvaluationCommand:
     if scope is JevScope.UNIVERSE:
         state = JevUniverseStateV1(
             header=_header(),
-            metrics={"advance_ratio": Decimal("0.5")},
-            coverage={"eligible_symbol_count": 2},
+            metrics={code: Decimal("0.5") for code in JEV_UNIVERSE_METRIC_FIELDS},
+            coverage={
+                "eligible_symbol_count": 2,
+                "missing_symbol_count": 0,
+                "coverage_ratio": Decimal(1),
+                "missing_reasons": (),
+            },
         )
     else:
+        features = {code: Decimal("0.01") for code in JEV_SYMBOL_FEATURE_FIELDS}
         state = JevSymbolStateV1(
             header=_header(),
             symbol="600000.SH",
-            security={"market": "SSE", "board": "MAIN"},
-            features={"return_5d": Decimal("0.01")},
+            security={
+                "market": "SSE",
+                "board": "MAIN",
+                "listing_age_trading_days": 1000,
+                "trading_status": "TRADING",
+                "is_st_or_delisting_risk": False,
+                "is_initial_no_limit_period": False,
+                "corporate_action_status": "NONE",
+                "adjustment_mode": "QFQ",
+                "available_feature_count": len(features),
+                "required_feature_count": len(JEV_SYMBOL_FEATURE_FIELDS),
+            },
+            features=features,
             missing_reasons=(),
         )
     return JevEvaluationCommand(

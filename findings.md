@@ -171,3 +171,6 @@
 22. 独立审查修复后的 Phase 3 定向回归为 `98 passed`；回测契约另行定点回归为 `2 passed`。
 23. 审查修复后 Ruff 为 `All checks passed!`，Pyright 为 `0 errors, 0 warnings, 0 informations`，Alembic 临时库再次完成 `0006 → 0005 → 0006` 并停在 `0006_phase3_jev_pnl_probabilities (head)`。
 24. TypeSafe SDK 依赖从宽泛的 `<1` 收紧为已验证的 `typesafe-sdk==0.7.0`，并新增真实 `SystemOneResponse`/`ChoiceAnswer` 离线契约测试。
+25. 第二轮独立审查指出 State 只限制“不得多字段”但未限制“不得少字段”；现已要求 Universe metrics/coverage 与 Symbol security 字段全集完整，并要求缺失特征与 `missing_reasons` 一一对应，特征计数与实际字段数一致。
+26. Evaluation 主记录现保存当前 owner token 和租约截止时间；过期接管、成功提交和失败提交都使用数据库条件 `UPDATE` 作为 CAS 裁决。两个 worker 并发抢占时只有一个获得新 Attempt，租约已过期的旧 owner 无法同时写入终态。
+27. 第二轮修复定点验证：State/Provider/Repository 受影响测试 44 项通过；Repository、C 组 Service 与 Phase 3 迁移回归 19 项通过；新增过期租约并发测试 3 项通过。Ruff 全通过，Pyright 0 errors/0 warnings。

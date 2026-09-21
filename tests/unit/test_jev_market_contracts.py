@@ -4,6 +4,10 @@ from decimal import Decimal
 import pytest
 
 from fkqt_jevinvestor.domain.jev_market import (
+    JEV_SYMBOL_FEATURE_FIELDS,
+    JEV_SYMBOL_SECURITY_FIELDS,
+    JEV_UNIVERSE_COVERAGE_FIELDS,
+    JEV_UNIVERSE_METRIC_FIELDS,
     JevEvaluationCommand,
     JevEvaluationStatus,
     JevEvaluationV1,
@@ -201,17 +205,18 @@ def test_scope_and_symbol_must_match() -> None:
 
 
 def test_command_hash_is_canonical_and_excludes_run_identity() -> None:
+    features = {code: Decimal("0.01") for code in JEV_SYMBOL_FEATURE_FIELDS}
     first = JevSymbolStateV1(
         header=_header(),
         symbol="600000.SH",
-        security={"market": "SSE", "board": "MAIN"},
-        features={"return_5d": Decimal("0.02"), "return_20d": Decimal("0.05")},
+        security=_complete_security(available=len(features)),
+        features=features,
         missing_reasons=(),
     )
     second = first.model_copy(
         update={
-            "security": {"board": "MAIN", "market": "SSE"},
-            "features": {"return_20d": Decimal("0.05"), "return_5d": Decimal("0.02")},
+            "security": dict(reversed(tuple(first.security.items()))),
+            "features": dict(reversed(tuple(first.features.items()))),
         }
     )
     first_command = JevEvaluationCommand(
@@ -229,7 +234,16 @@ def test_command_hash_is_canonical_and_excludes_run_identity() -> None:
 
 
 def test_state_scope_must_match_command_scope() -> None:
-    state = JevUniverseStateV1(header=_header(), metrics={}, coverage={})
+    state = JevUniverseStateV1(
+        header=_header(),
+        metrics={code: Decimal(0) for code in JEV_UNIVERSE_METRIC_FIELDS},
+        coverage={
+            "eligible_symbol_count": 12,
+            "missing_symbol_count": 0,
+            "coverage_ratio": Decimal(1),
+            "missing_reasons": (),
+        },
+    )
     with pytest.raises(ValueError, match="JEV_COMMAND_SCOPE_MISMATCH"):
         JevEvaluationCommand(
             scope=JevScope.SYMBOL,
@@ -270,3 +284,64 @@ def test_available_symbol_evaluation_requires_complete_frozen_question_set() -> 
     wrong_version = _symbol_results()[0].model_copy(update={"question_version": "v2"})
     with pytest.raises(ValueError, match="JEV_RESULT_QUESTION_CONTRACT_INVALID"):
         _evaluation(results=(wrong_version, *_symbol_results()[1:]))
+
+
+def _complete_security(*, available: int) -> dict[str, str | bool | int | None]:
+    values: dict[str, str | bool | int | None] = {
+        "market": "SSE",
+        "board": "MAIN",
+        "listing_age_trading_days": 1000,
+        "trading_status": "TRADING",
+        "is_st_or_delisting_risk": False,
+        "is_initial_no_limit_period": False,
+        "corporate_action_status": "NONE",
+        "adjustment_mode": "QFQ",
+        "available_feature_count": available,
+        "required_feature_count": len(JEV_SYMBOL_FEATURE_FIELDS),
+    }
+    assert set(values) == JEV_SYMBOL_SECURITY_FIELDS
+    return values
+
+
+def test_symbol_state_requires_complete_security_and_exact_missing_reasons() -> None:
+    features = {"return_5d": Decimal("0.01")}
+    missing = tuple(
+        f"{code}:INSUFFICIENT_HISTORY"
+        for code in sorted(JEV_SYMBOL_FEATURE_FIELDS - set(features))
+    )
+    valid = {
+        "header": _header(),
+        "symbol": "600000.SH",
+        "security": _complete_security(available=1),
+        "features": features,
+        "missing_reasons": missing,
+    }
+    JevSymbolStateV1.model_validate(valid)
+
+    with pytest.raises(ValueError, match="JEV_STATE_SECURITY_FIELDS_INVALID"):
+        JevSymbolStateV1.model_validate({**valid, "security": {"market": "SSE"}})
+    with pytest.raises(ValueError, match="JEV_STATE_MISSING_REASONS_INVALID"):
+        JevSymbolStateV1.model_validate({**valid, "missing_reasons": ()})
+    with pytest.raises(ValueError, match="JEV_STATE_FEATURE_COUNT_INVALID"):
+        JevSymbolStateV1.model_validate(
+            {**valid, "security": _complete_security(available=2)}
+        )
+
+
+def test_universe_state_requires_complete_metric_and_coverage_contract() -> None:
+    metrics = {code: Decimal(0) for code in JEV_UNIVERSE_METRIC_FIELDS}
+    coverage: dict[str, int | Decimal | tuple[str, ...] | None] = {
+        "eligible_symbol_count": 1,
+        "missing_symbol_count": 0,
+        "coverage_ratio": Decimal(1),
+        "missing_reasons": (),
+    }
+    assert set(coverage) == JEV_UNIVERSE_COVERAGE_FIELDS
+    JevUniverseStateV1(header=_header(), metrics=metrics, coverage=coverage)
+
+    with pytest.raises(ValueError, match="JEV_STATE_METRIC_FIELDS_INVALID"):
+        JevUniverseStateV1(
+            header=_header(),
+            metrics={"advance_ratio": Decimal(1)},
+            coverage=coverage,
+        )

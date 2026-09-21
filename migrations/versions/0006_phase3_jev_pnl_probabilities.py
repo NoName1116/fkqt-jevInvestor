@@ -27,6 +27,8 @@ def upgrade() -> None:
         sa.Column("question_set_version", sa.String(64), nullable=False),
         sa.Column("status", sa.String(32), nullable=False),
         sa.Column("latest_attempt_sequence", sa.Integer, nullable=False),
+        sa.Column("current_owner_token", sa.String(36), nullable=True),
+        sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint(

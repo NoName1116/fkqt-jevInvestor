@@ -50,6 +50,9 @@ def test_phase3_jev_tables_are_constrained_and_reversible(tmp_path: Path) -> Non
     with sqlite3.connect(database) as connection:
         assert PHASE3_TABLES <= _tables(connection)
         assert ("formal_key",) in _unique_columns(connection, "ai_signal_jev_evaluation")
+        assert {"current_owner_token", "lease_expires_at"} <= _columns(
+            connection, "ai_signal_jev_evaluation"
+        )
         assert ("evaluation_id", "sequence") in _unique_columns(
             connection, "ai_signal_jev_attempt"
         )

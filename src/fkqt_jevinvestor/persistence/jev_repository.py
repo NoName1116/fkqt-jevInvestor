@@ -8,7 +8,8 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -186,20 +187,11 @@ class JevEvaluationRepository:
                             existing_result=existing,
                         )
                     if record.status == JevEvaluationStatus.IN_PROGRESS.value:
-                        attempt = await session.scalar(
-                            select(JevAttemptRecord).where(
-                                JevAttemptRecord.evaluation_id == record.id,
-                                JevAttemptRecord.sequence
-                                == record.latest_attempt_sequence,
-                            )
-                        )
                         now = self._clock()
                         if (
-                            attempt is not None
-                            and attempt.lease_expires_at is not None
-                            and _stored_utc(attempt.lease_expires_at) <= as_utc(now)
+                            record.lease_expires_at is not None
+                            and _stored_utc(record.lease_expires_at) <= as_utc(now)
                         ):
-                            self._expire_attempt(attempt, now)
                             return await self._retry_claim(
                                 session, run_id, command, record
                             )
@@ -225,6 +217,7 @@ class JevEvaluationRepository:
         async with self._session_factory.begin() as session:
             record, attempt = await self._owned_records(session, claim)
             _validate_result_identity(record, claim, result)
+            await self._finish_claim(session, record, claim, result)
             await session.execute(
                 delete(JevQuestionResultRecord).where(
                     JevQuestionResultRecord.evaluation_id == record.id
@@ -245,7 +238,7 @@ class JevEvaluationRepository:
                         },
                     )
                 )
-            self._finish_records(record, attempt, result)
+            self._finish_attempt(attempt, result)
             await session.flush()
         return result
 
@@ -265,12 +258,13 @@ class JevEvaluationRepository:
         async with self._session_factory.begin() as session:
             record, attempt = await self._owned_records(session, claim)
             _validate_result_identity(record, claim, result)
+            await self._finish_claim(session, record, claim, result)
             await session.execute(
                 delete(JevQuestionResultRecord).where(
                     JevQuestionResultRecord.evaluation_id == record.id
                 )
             )
-            self._finish_records(record, attempt, result)
+            self._finish_attempt(attempt, result)
             await session.flush()
         return result
 
@@ -312,6 +306,8 @@ class JevEvaluationRepository:
     ) -> JevClaim:
         now = self._clock()
         evaluation_id = f"jev-{command.formal_key[:24]}"
+        owner_token = str(uuid4())
+        lease_expires_at = now + self._lease_duration
         record = JevEvaluationRecord(
             id=evaluation_id,
             formal_key=command.formal_key,
@@ -332,12 +328,13 @@ class JevEvaluationRepository:
             question_set_version=command.question_set_version,
             status=JevEvaluationStatus.IN_PROGRESS.value,
             latest_attempt_sequence=1,
+            current_owner_token=owner_token,
+            lease_expires_at=lease_expires_at,
             created_at=now,
             updated_at=now,
         )
         session.add(record)
         attempt_id = _stable_id("jeva", evaluation_id, 1)
-        owner_token = str(uuid4())
         session.add(
             self._new_attempt(
                 attempt_id,
@@ -371,6 +368,49 @@ class JevEvaluationRepository:
         now = self._clock()
         attempt_id = _stable_id("jeva", record.id, sequence)
         owner_token = str(uuid4())
+        lease_expires_at = now + self._lease_duration
+        conditions = [
+            JevEvaluationRecord.id == record.id,
+            JevEvaluationRecord.status == record.status,
+            JevEvaluationRecord.latest_attempt_sequence
+            == record.latest_attempt_sequence,
+            JevEvaluationRecord.current_owner_token == record.current_owner_token,
+        ]
+        if record.status == JevEvaluationStatus.IN_PROGRESS.value:
+            conditions.append(JevEvaluationRecord.lease_expires_at <= as_utc(now))
+        competition = cast(
+            CursorResult[Any],
+            await session.execute(
+                update(JevEvaluationRecord)
+                .where(*conditions)
+                .values(
+                    status=JevEvaluationStatus.IN_PROGRESS.value,
+                    latest_attempt_sequence=sequence,
+                    current_owner_token=owner_token,
+                    lease_expires_at=lease_expires_at,
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        if competition.rowcount != 1:
+            return JevClaim(
+                status=ClaimStatus.IN_PROGRESS,
+                evaluation_id=record.id,
+                formal_key=record.formal_key,
+                attempt_id=None,
+            )
+        previous_attempt = await session.scalar(
+            select(JevAttemptRecord).where(
+                JevAttemptRecord.evaluation_id == record.id,
+                JevAttemptRecord.sequence == record.latest_attempt_sequence,
+            )
+        )
+        if (
+            previous_attempt is not None
+            and previous_attempt.status == JevEvaluationStatus.IN_PROGRESS.value
+        ):
+            self._expire_attempt(previous_attempt, now)
         session.add(
             self._new_attempt(
                 attempt_id,
@@ -382,9 +422,6 @@ class JevEvaluationRepository:
                 now,
             )
         )
-        record.status = JevEvaluationStatus.IN_PROGRESS.value
-        record.latest_attempt_sequence = sequence
-        record.updated_at = now
         await session.flush()
         return JevClaim(
             status=ClaimStatus.ACQUIRED,
@@ -498,14 +535,43 @@ class JevEvaluationRepository:
             raise JevClaimConflict("JEV_CLAIM_NOT_ACTIVE")
         return record, attempt
 
-    @staticmethod
-    def _finish_records(
+    async def _finish_claim(
+        self,
+        session: AsyncSession,
         record: JevEvaluationRecord,
+        claim: JevClaim,
+        result: JevEvaluationV1,
+    ) -> None:
+        finished = cast(
+            CursorResult[Any],
+            await session.execute(
+                update(JevEvaluationRecord)
+                .where(
+                    JevEvaluationRecord.id == record.id,
+                    JevEvaluationRecord.status
+                    == JevEvaluationStatus.IN_PROGRESS.value,
+                    JevEvaluationRecord.latest_attempt_sequence
+                    == claim.attempt_sequence,
+                    JevEvaluationRecord.current_owner_token == claim.owner_token,
+                    JevEvaluationRecord.lease_expires_at > as_utc(self._clock()),
+                )
+                .values(
+                    status=result.status.value,
+                    current_owner_token=None,
+                    lease_expires_at=None,
+                    updated_at=as_utc(result.finished_at),
+                )
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        if finished.rowcount != 1:
+            raise JevClaimConflict("JEV_CLAIM_NOT_ACTIVE")
+
+    @staticmethod
+    def _finish_attempt(
         attempt: JevAttemptRecord,
         result: JevEvaluationV1,
     ) -> None:
-        record.status = result.status.value
-        record.updated_at = as_utc(result.finished_at)
         attempt.started_at = as_utc(result.started_at)
         attempt.finished_at = as_utc(result.finished_at)
         attempt.lease_expires_at = None

@@ -310,6 +310,10 @@ class JevEvaluationRecord(Base):
     question_set_version: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32))
     latest_attempt_sequence: Mapped[int] = mapped_column(Integer)
+    current_owner_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

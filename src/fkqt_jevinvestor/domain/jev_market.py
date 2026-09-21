@@ -159,6 +159,10 @@ class JevUniverseStateV1(BaseModel):
             self.coverage
         ) <= JEV_UNIVERSE_COVERAGE_FIELDS:
             raise ValueError("JEV_STATE_FIELD_FORBIDDEN")
+        if set(self.metrics) != set(JEV_UNIVERSE_METRIC_FIELDS):
+            raise ValueError("JEV_STATE_METRIC_FIELDS_INVALID")
+        if set(self.coverage) != set(JEV_UNIVERSE_COVERAGE_FIELDS):
+            raise ValueError("JEV_STATE_COVERAGE_FIELDS_INVALID")
         return self
 
 
@@ -177,6 +181,23 @@ class JevSymbolStateV1(BaseModel):
             self.features
         ) <= JEV_SYMBOL_FEATURE_FIELDS:
             raise ValueError("JEV_STATE_FIELD_FORBIDDEN")
+        if set(self.security) != set(JEV_SYMBOL_SECURITY_FIELDS):
+            raise ValueError("JEV_STATE_SECURITY_FIELDS_INVALID")
+        if (
+            self.security["available_feature_count"] != len(self.features)
+            or self.security["required_feature_count"]
+            != len(JEV_SYMBOL_FEATURE_FIELDS)
+        ):
+            raise ValueError("JEV_STATE_FEATURE_COUNT_INVALID")
+        missing_features = JEV_SYMBOL_FEATURE_FIELDS - set(self.features)
+        reason_features: set[str] = set()
+        for reason in self.missing_reasons:
+            feature, separator, detail = reason.partition(":")
+            if not separator or not detail or feature in reason_features:
+                raise ValueError("JEV_STATE_MISSING_REASONS_INVALID")
+            reason_features.add(feature)
+        if reason_features != set(missing_features):
+            raise ValueError("JEV_STATE_MISSING_REASONS_INVALID")
         return self
 
 

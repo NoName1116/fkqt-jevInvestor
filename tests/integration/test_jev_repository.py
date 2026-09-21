@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fkqt_jevinvestor.domain.jev_market import (
+    JEV_SYMBOL_FEATURE_FIELDS,
     JevEvaluationCommand,
     JevEvaluationStatus,
     JevEvaluationV1,
@@ -24,6 +25,7 @@ from fkqt_jevinvestor.domain.jev_market import (
 )
 from fkqt_jevinvestor.persistence.jev_repository import (
     ClaimStatus,
+    JevClaim,
     JevClaimConflict,
     JevEvaluationRepository,
 )
@@ -49,7 +51,7 @@ async def session_factory(tmp_path: Path) -> AsyncIterator[SessionFactory]:
     await engine.dispose()
 
 
-def _command(*, security: dict[str, str] | None = None) -> JevEvaluationCommand:
+def _command() -> JevEvaluationCommand:
     header = JevStateHeaderV1(
         decision_date=date(2026, 9, 18),
         decision_cutoff=datetime(2026, 9, 18, 15, tzinfo=UTC),
@@ -60,11 +62,23 @@ def _command(*, security: dict[str, str] | None = None) -> JevEvaluationCommand:
         market_snapshot_hash="b" * 64,
         feature_set_version="market-features-v1",
     )
+    features = {code: Decimal("0.01000000") for code in JEV_SYMBOL_FEATURE_FIELDS}
     state = JevSymbolStateV1(
         header=header,
         symbol="600000.SH",
-        security=security or {"market": "SSE"},
-        features={"return_5d": Decimal("0.01000000")},
+        security={
+            "market": "SSE",
+            "board": "MAIN",
+            "listing_age_trading_days": 1000,
+            "trading_status": "TRADING",
+            "is_st_or_delisting_risk": False,
+            "is_initial_no_limit_period": False,
+            "corporate_action_status": "NONE",
+            "adjustment_mode": "QFQ",
+            "available_feature_count": len(features),
+            "required_feature_count": len(JEV_SYMBOL_FEATURE_FIELDS),
+        },
+        features=features,
         missing_reasons=(),
     )
     return JevEvaluationCommand(
@@ -313,6 +327,64 @@ async def test_expired_claim_is_reacquired_and_old_owner_cannot_commit(
     assert replacement.attempt_sequence == 2
     with pytest.raises(JevClaimConflict, match="JEV_CLAIM_NOT_ACTIVE"):
         await first_repository.record_success(first, _result(command_value))
+
+
+@pytest.mark.asyncio
+async def test_two_workers_compete_atomically_for_expired_claim(
+    session_factory: SessionFactory,
+) -> None:
+    clock = MutableClock()
+    owner = JevEvaluationRepository(
+        session_factory, lease_duration=timedelta(seconds=30), clock=clock
+    )
+    competitors = tuple(
+        JevEvaluationRepository(
+            session_factory, lease_duration=timedelta(seconds=30), clock=clock
+        )
+        for _ in range(2)
+    )
+    command_value = _command()
+    await owner.claim(uuid4(), command_value)
+    clock.value += timedelta(seconds=31)
+
+    claims = await asyncio.gather(
+        *(repository.claim(uuid4(), command_value) for repository in competitors)
+    )
+
+    assert sorted(claim.status for claim in claims) == [
+        ClaimStatus.ACQUIRED,
+        ClaimStatus.IN_PROGRESS,
+    ]
+    assert sum(claim.attempt_sequence == 2 for claim in claims) == 1
+    attempts = await owner.list_attempts(command_value.formal_key)
+    assert [attempt.sequence for attempt in attempts] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_expired_owner_cannot_finish_while_replacement_claims(
+    session_factory: SessionFactory,
+) -> None:
+    clock = MutableClock()
+    owner = JevEvaluationRepository(
+        session_factory, lease_duration=timedelta(seconds=30), clock=clock
+    )
+    replacement = JevEvaluationRepository(
+        session_factory, lease_duration=timedelta(seconds=30), clock=clock
+    )
+    command_value = _command()
+    stale_claim = await owner.claim(uuid4(), command_value)
+    clock.value += timedelta(seconds=31)
+
+    finish_result, replacement_claim = await asyncio.gather(
+        owner.record_success(stale_claim, _result(command_value)),
+        replacement.claim(uuid4(), command_value),
+        return_exceptions=True,
+    )
+
+    assert isinstance(finish_result, JevClaimConflict)
+    assert isinstance(replacement_claim, JevClaim)
+    assert replacement_claim.status == ClaimStatus.ACQUIRED
+    assert replacement_claim.attempt_sequence == 2
 
 
 @pytest.mark.asyncio
