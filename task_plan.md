@@ -25,7 +25,9 @@
 | P17 | 冻结回测 Contributor 契约 | 用户指定沙耶负责回测 | Entity、Protocol、文件所有权和验收规范 | 已完成 |
 | P18 | 用户审阅实施计划并选择执行方式 | 两份实施计划 | 批准或修改意见 | 已完成 |
 | P19 | 创建公开 GitHub 仓库并迁移 | 批准后的迁移计划 | 独立仓库与 Phase 0/1 等价基线 | 已完成 |
-| P20 | 冻结 `backtest-contract-v1` | Phase 2 Task 1 | 沙耶可并行开发的稳定标签 | 待开始 |
+| P20 | 冻结 `backtest-contract-v1` | Phase 2 Task 1 | 契约提交与 PR 已完成；标签待非作者 Review 和合并后发布 | 进行中 |
+| P21 | 实施 Phase 2 行情快照与确定性特征 | Tasks 2–8 | Adapter、不可变存储、特征、横截面、持久化、API、CLI | 已完成 |
+| P22 | Phase 2 最终验收与运行手册 | Task 9 | 全量静态检查、离线测试、迁移状态和运行手册 | 已完成 |
 
 ## Phase 0 验收记录
 
@@ -54,7 +56,7 @@
 
 ## 当前停止点
 
-Phase 0/1 已等价迁移到 `C:\Users\1\Desktop\FKQTPRO\fkqt-jevInvestor`。迁移验收结果为 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 79 passed/1 deselected，Alembic 往返后为 `0003_phase1_audit_snapshot (head)`。下一步完成 Phase 2 Task 1 并推送 `backtest-contract-v1` 标签后，沙耶可通过 Fork + Pull Request 开始回测开发。
+Phase 2 核心实现已完成。完整验收首次运行得到 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 100 passed/2 failed/1 deselected；两个失败均为旧迁移测试仍把 `head` 写死为 Phase 1，修正后只重跑失败项得到 2 passed。Alembic 当前为 `0004_phase2_market_features (head)`。下一步是 Contract PR 获得非作者 Review 并合并，随后发布不可移动的 `backtest-contract-v1` 标签，沙耶再从该标签开始回测实现。
 # Phase 1 Task 8 最终状态（2026-09-21）
 
 - 状态：完成。
