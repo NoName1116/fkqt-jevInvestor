@@ -64,24 +64,21 @@ class FrozenTargetBundleV1(BaseModel):
         input_hash: str,
     ) -> "FrozenTargetBundleV1":
         ordered = tuple(sorted(targets, key=lambda item: item.symbol))
-        values = {
-            "dataset_id": dataset_id,
-            "dataset_hash": dataset_hash,
-            "decision_date": decision_date,
-            "planned_execution_date": planned_execution_date,
-            "universe_snapshot_hash": universe_snapshot_hash,
-            "market_snapshot_hash": market_snapshot_hash,
-            "feature_snapshot_hash": feature_snapshot_hash,
-            "sizing_version": sizing_version,
-            "targets": ordered,
-            "input_hash": input_hash,
-        }
-        provisional = cls(**values, content_hash="0" * 64)
-        return cls(
-            **values,
-            content_hash=sha256_json(
-                provisional.model_dump(mode="json", exclude={"content_hash"})
-            ),
+        provisional = cls(
+            dataset_id=dataset_id,
+            dataset_hash=dataset_hash,
+            decision_date=decision_date,
+            planned_execution_date=planned_execution_date,
+            universe_snapshot_hash=universe_snapshot_hash,
+            market_snapshot_hash=market_snapshot_hash,
+            feature_snapshot_hash=feature_snapshot_hash,
+            sizing_version=sizing_version,
+            targets=ordered,
+            input_hash=input_hash,
+            content_hash="0" * 64,
+        )
+        return provisional.model_copy(
+            update={"content_hash": provisional.computed_content_hash()}
         )
 
     def computed_content_hash(self) -> str:

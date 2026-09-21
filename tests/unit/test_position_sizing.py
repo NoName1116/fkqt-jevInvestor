@@ -95,7 +95,7 @@ def _position(symbol: str, weight: str) -> PositionState:
 def _portfolio(*positions: PositionState) -> PortfolioState:
     return PortfolioState(
         portfolio_id="paper-main",
-        cash_balance=Decimal("1000000"),
+        cash_balance=Decimal(1000000),
         frozen_cash=Decimal(0),
         realized_pnl=Decimal(0),
         positions=positions,
@@ -113,7 +113,7 @@ def _run(
         decision_date=date(2026, 9, 18),
         planned_execution_date=date(2026, 9, 21),
         portfolio=portfolio or _portfolio(),
-        total_equity=Decimal("1000000"),
+        total_equity=Decimal(1000000),
         evaluations=evaluations,
         feature_snapshots=features,
         config=PositionSizingConfigV1(),
@@ -140,7 +140,7 @@ def test_size_one_uses_volatility_and_liquidity_with_fixed_decimal_context() -> 
 def test_size_one_applies_volatility_floor_liquidity_clamp_and_single_cap() -> None:
     config = PositionSizingConfigV1()
 
-    assert size_one(Decimal("0.001"), Decimal("2"), config) == Decimal("0.10000000")
+    assert size_one(Decimal("0.001"), Decimal(2), config) == Decimal("0.10000000")
     assert size_one(Decimal("0.02"), Decimal("0.01"), config) == Decimal("0.02500000")
 
 

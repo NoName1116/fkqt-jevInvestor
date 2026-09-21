@@ -63,7 +63,7 @@ def _config(dataset_id: str, dataset_hash: str, start: date, end: date) -> Backt
         start_date=start,
         end_date=end,
         warmup_trading_days=20,
-        initial_cash=Decimal("1000000"),
+        initial_cash=Decimal(1000000),
         benchmark_symbol="000300.SH",
         dataset_id=dataset_id,
         dataset_hash=dataset_hash,
@@ -80,7 +80,7 @@ async def test_store_and_provider_replay_two_days_without_external_calls(
     dataset_hash = "9" * 64
     days = (_day(date(2026, 9, 18), "1"), _day(date(2026, 9, 21), "2"))
     store = FrozenTargetStore(tmp_path)
-    hashes = {}
+    hashes: dict[date, str] = {}
     for day in days:
         bundle = _bundle(dataset_id, dataset_hash, day)
         stored_path = store.save(bundle)
@@ -96,7 +96,7 @@ async def test_store_and_provider_replay_two_days_without_external_calls(
     config = _config(dataset_id, dataset_hash, days[0].decision_date, days[1].decision_date)
     portfolio = PortfolioState(
         portfolio_id="paper-main",
-        cash_balance=Decimal("1000000"),
+        cash_balance=Decimal(1000000),
         frozen_cash=Decimal(0),
         realized_pnl=Decimal(0),
         version=1,
@@ -141,7 +141,7 @@ async def test_provider_rejects_day_hash_or_sizing_mismatch(tmp_path: Path) -> N
     )
     portfolio = PortfolioState(
         portfolio_id="paper-main",
-        cash_balance=Decimal("1000000"),
+        cash_balance=Decimal(1000000),
         frozen_cash=Decimal(0),
         realized_pnl=Decimal(0),
         version=1,

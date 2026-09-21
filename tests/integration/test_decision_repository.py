@@ -25,7 +25,7 @@ from fkqt_jevinvestor.persistence.models import JevEvaluationRecord
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.services.portfolio_service import CreatePortfolio
-from tests.unit.test_decision_contracts import _input
+from tests.unit.test_decision_contracts import _input  # pyright: ignore[reportPrivateUsage]
 
 SessionFactory = async_sessionmaker[AsyncSession]
 

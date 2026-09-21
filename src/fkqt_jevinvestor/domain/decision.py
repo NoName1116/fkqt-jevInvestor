@@ -6,7 +6,6 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fkqt_jevinvestor.domain.jev_market import (
-    JevEvaluationStatus,
     JevEvaluationV1,
     JevScope,
 )

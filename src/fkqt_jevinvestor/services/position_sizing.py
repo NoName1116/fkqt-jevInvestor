@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from decimal import ROUND_HALF_UP, Context, Decimal, localcontext
 from enum import StrEnum
+from typing import TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -110,6 +111,15 @@ class DecisionSignalBatchV1(BaseModel):
     target_batch_hash: str = Field(min_length=64, max_length=64)
 
 
+class _SizingDraft(TypedDict):
+    evaluation: DecisionEvaluationV1
+    current: Decimal
+    raw: Decimal
+    target: Decimal
+    status: SizingStatus
+    block_code: str | None
+
+
 def _quantize(value: Decimal, quantum: Decimal = _WEIGHT_QUANTUM) -> Decimal:
     return value.quantize(quantum, rounding=ROUND_HALF_UP)
 
@@ -179,7 +189,7 @@ def build_position_sizing_run(
         (item.current_position_pct for item in portfolio.positions), Decimal(0)
     )
     preexisting_over_limit = current_gross > config.max_gross_position_pct
-    drafts: list[dict[str, object]] = []
+    drafts: list[_SizingDraft] = []
 
     with localcontext(_DECIMAL_CONTEXT):
         for evaluation in ordered:
@@ -270,15 +280,10 @@ def build_position_sizing_run(
     targets: list[SizedTargetV1] = []
     for item in drafts:
         evaluation = item["evaluation"]
-        assert isinstance(evaluation, DecisionEvaluationV1)
         current = item["current"]
         raw = item["raw"]
         target = item["target"]
         status = item["status"]
-        assert isinstance(current, Decimal)
-        assert isinstance(raw, Decimal)
-        assert isinstance(target, Decimal)
-        assert isinstance(status, SizingStatus)
         if (
             evaluation.action is DecisionAction.KEEP
             and status is SizingStatus.SIZED

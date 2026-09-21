@@ -8,7 +8,7 @@ from fkqt_jevinvestor.domain.decision import (
     DecisionEvaluationCommand,
 )
 from fkqt_jevinvestor.providers.deepseek_decision import DeepSeekDecisionProvider
-from tests.unit.test_decision_contracts import _input
+from tests.unit.test_decision_contracts import _input  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.live

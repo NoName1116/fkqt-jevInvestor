@@ -99,12 +99,12 @@ def _input(**updates: object) -> DecisionInputV1:
         ),
         "portfolio": PortfolioState(
             portfolio_id="paper-main",
-            cash_balance=Decimal("1000000"),
+            cash_balance=Decimal(1000000),
             frozen_cash=Decimal(0),
             realized_pnl=Decimal(0),
             version=1,
         ),
-        "total_equity": Decimal("1000000"),
+        "total_equity": Decimal(1000000),
         "position": None,
         "recent_actions": (),
         "pending_orders": (),
@@ -182,6 +182,7 @@ def test_decision_input_rejects_future_evidence(future_kind: str) -> None:
 
 def test_command_hash_is_canonical_and_formal_key_excludes_run_identity() -> None:
     left = _input()
+    assert left.feature_snapshot is not None
     right = _input(
         feature_snapshot=left.feature_snapshot.model_copy(
             update={"values": dict(reversed(tuple(left.feature_snapshot.values.items())))}

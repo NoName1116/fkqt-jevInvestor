@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 
+from fkqt_jevinvestor.domain.decision import DecisionAction
 from fkqt_jevinvestor.domain.execution import (
     ExecutionPolicy,
     OrderSide,
@@ -252,7 +253,7 @@ def test_blocked_enter_from_position_sizer_never_creates_order() -> None:
             SizedTargetV1(
                 symbol="000001.SZ",
                 decision_evaluation_id="decision-1",
-                requested_action="ENTER",
+                requested_action=DecisionAction.ENTER,
                 status=SizingStatus.BLOCKED,
                 current_position_pct=Decimal(0),
                 raw_target_position_pct=Decimal(0),

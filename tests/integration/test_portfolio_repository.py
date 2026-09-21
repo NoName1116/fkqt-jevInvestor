@@ -11,6 +11,7 @@ from alembic.config import Config
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fkqt_jevinvestor.domain.decision import DecisionAction
 from fkqt_jevinvestor.domain.market import (
     MarketExecutionSnapshot,
     TradingDayStatus,
@@ -37,13 +38,16 @@ from fkqt_jevinvestor.persistence.repositories import (
 )
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.services.portfolio_service import CreatePortfolio, ExecuteTradeDate
-from fkqt_jevinvestor.services.signal_validator import validate_signal_batch
 from fkqt_jevinvestor.services.position_sizing import (
     PositionSizingConfigV1,
     to_validated_signal_batch,
 )
-from tests.unit.test_position_sizing import _evaluation, _features, _run
-from fkqt_jevinvestor.domain.decision import DecisionAction
+from fkqt_jevinvestor.services.signal_validator import validate_signal_batch
+from tests.unit.test_position_sizing import (
+    _evaluation,  # pyright: ignore[reportPrivateUsage]
+    _features,  # pyright: ignore[reportPrivateUsage]
+    _run,  # pyright: ignore[reportPrivateUsage]
+)
 
 SessionFactory = async_sessionmaker[AsyncSession]
 

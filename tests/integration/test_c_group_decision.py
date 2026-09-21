@@ -16,6 +16,7 @@ from fkqt_jevinvestor.domain.decision import (
     DecisionEvaluationCommand,
     DecisionEvaluationStatus,
     DecisionHistoryV1,
+    DecisionModelOutputV1,
     DecisionProviderResult,
 )
 from fkqt_jevinvestor.domain.jev_market import (
@@ -23,7 +24,7 @@ from fkqt_jevinvestor.domain.jev_market import (
     JevEvaluationV1,
     JevScope,
 )
-from fkqt_jevinvestor.domain.market_features import MarketFeatureSnapshot, MarketSnapshot
+from fkqt_jevinvestor.domain.market_features import MarketSnapshot
 from fkqt_jevinvestor.domain.portfolio import PortfolioState, PositionState
 from fkqt_jevinvestor.persistence.decision_repository import DecisionEvaluationRepository
 from fkqt_jevinvestor.persistence.models import JevEvaluationRecord
@@ -37,8 +38,8 @@ from fkqt_jevinvestor.services.c_group_decision import (
 from fkqt_jevinvestor.services.jev_market_service import JevRunEvaluationV1
 from fkqt_jevinvestor.services.portfolio_service import CreatePortfolio
 from fkqt_jevinvestor.services.position_sizing import PositionSizingConfigV1
-from tests.unit.test_decision_contracts import _jev
-from tests.unit.test_position_sizing import _features
+from tests.unit.test_decision_contracts import _jev  # pyright: ignore[reportPrivateUsage]
+from tests.unit.test_position_sizing import _features  # pyright: ignore[reportPrivateUsage]
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -58,11 +59,13 @@ class FakeDecisionProvider:
             '"invalidation":"趋势结构失效。"}'
         )
         return DecisionProviderResult(
-            output={
-                "action": action,
-                "thesis": "冻结证据一致。",
-                "invalidation": "趋势结构失效。",
-            },
+            output=DecisionModelOutputV1.model_validate(
+                {
+                    "action": action,
+                    "thesis": "冻结证据一致。",
+                    "invalidation": "趋势结构失效。",
+                }
+            ),
             raw_response_text=raw,
             raw_response_hash=("9" if action == "ENTER" else "8") * 64,
         )
@@ -166,7 +169,7 @@ def _jev_run(
 def _portfolio() -> PortfolioState:
     return PortfolioState(
         portfolio_id="paper-main",
-        cash_balance=Decimal("950000"),
+        cash_balance=Decimal(950000),
         frozen_cash=Decimal(0),
         realized_pnl=Decimal(0),
         positions=(
@@ -197,7 +200,7 @@ def _command(run_id: UUID, jev: JevRunEvaluationV1) -> CGroupDecisionCommandV1:
         candidate_limit=2,
         jev=jev,
         portfolio=_portfolio(),
-        total_equity=Decimal("1000000"),
+        total_equity=Decimal(1000000),
         recent_actions={
             "000002.SZ": (
                 DecisionHistoryV1(

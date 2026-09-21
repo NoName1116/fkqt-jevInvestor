@@ -4,7 +4,6 @@ from typing import Any
 import pytest
 
 from fkqt_jevinvestor.domain.decision import (
-    DecisionAction,
     DecisionEvaluationCommand,
 )
 from fkqt_jevinvestor.providers.base import (
@@ -12,7 +11,7 @@ from fkqt_jevinvestor.providers.base import (
     ProviderUnavailableError,
 )
 from fkqt_jevinvestor.providers.deepseek_decision import DeepSeekDecisionProvider
-from tests.unit.test_decision_contracts import _input
+from tests.unit.test_decision_contracts import _input  # pyright: ignore[reportPrivateUsage]
 
 
 class FakeResponses:

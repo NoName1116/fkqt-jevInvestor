@@ -20,8 +20,8 @@ def test_migrated_revision_chain_is_repeatable_and_reversible(tmp_path: Path) ->
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert revision == ("0006_phase3_jev_pnl_probabilities",)
-    assert len({name for name in tables if name.startswith("ai_signal_")}) == 17
+    assert revision == ("0007_phase4_llm_position_sizing",)
+    assert len({name for name in tables if name.startswith("ai_signal_")}) == 22
 
     command.downgrade(config, "base")
     with sqlite3.connect(database) as connection:

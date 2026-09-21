@@ -1,4 +1,5 @@
 import json
+from typing import cast
 
 from fkqt_jevinvestor.providers.decision_prompt import (
     DECISION_OUTPUT_SCHEMA_VERSION,
@@ -6,18 +7,19 @@ from fkqt_jevinvestor.providers.decision_prompt import (
     build_decision_messages,
     decision_output_json_schema,
 )
-from tests.unit.test_decision_contracts import _input
+from tests.unit.test_decision_contracts import _input  # pyright: ignore[reportPrivateUsage]
 
 
 def test_prompt_versions_and_schema_freeze_discrete_output() -> None:
     schema = decision_output_json_schema()
+    properties = cast(dict[str, dict[str, object]], schema["properties"])
 
     assert DECISION_PROMPT_VERSION == "decision-prompt-v1"
     assert DECISION_OUTPUT_SCHEMA_VERSION == "decision-output-v1"
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["action", "thesis", "invalidation"]
-    assert set(schema["properties"]) == {"action", "thesis", "invalidation"}
-    assert schema["properties"]["action"]["enum"] == [
+    assert set(properties) == {"action", "thesis", "invalidation"}
+    assert properties["action"]["enum"] == [
         "ENTER",
         "KEEP",
         "EXIT",

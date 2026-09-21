@@ -1,6 +1,6 @@
 import hashlib
 import json
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from pydantic import SecretStr, ValidationError
 
@@ -27,7 +27,8 @@ class ResponsesResource(Protocol):
 
 
 class ResponsesClient(Protocol):
-    responses: ResponsesResource
+    @property
+    def responses(self) -> ResponsesResource: ...
 
 
 class DeepSeekDecisionProvider:
@@ -65,7 +66,7 @@ class DeepSeekDecisionProvider:
             timeout=timeout_seconds,
         )
         return cls(
-            client=client,
+            client=cast(ResponsesClient, client),
             model=model,
             provider_version=provider_version,
             reasoning_effort=reasoning_effort,
