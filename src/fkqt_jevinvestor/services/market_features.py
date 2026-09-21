@@ -1,7 +1,11 @@
+from collections.abc import Mapping
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from itertools import pairwise
 from statistics import mean
+from typing import Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fkqt_jevinvestor.domain.market_features import (
     DailyBar,
@@ -14,6 +18,128 @@ FEATURE_VERSION = "market-features-v1"
 _QUANTUM = Decimal("0.00000001")
 _ANNUALIZATION_FACTOR = Decimal(252).sqrt()
 _CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
+_CROSS_SECTIONAL_FEATURES = (
+    ("return_20d", "return_20d_percentile"),
+    ("realized_vol_20d", "volatility_percentile"),
+    ("amount_ratio_5d_20d", "liquidity_percentile"),
+)
+
+
+class CrossSectionEmptyError(ValueError):
+    pass
+
+
+class FeatureCoverage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    feature_code: str
+    candidate_count: int = Field(ge=0)
+    valid_count: int = Field(ge=0)
+    coverage_ratio: Decimal = Field(ge=0, le=1)
+    missing_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_counts_and_reason(self) -> Self:
+        if self.valid_count > self.candidate_count:
+            raise ValueError("valid_count must not exceed candidate_count")
+        if (self.valid_count == 0) != (self.missing_reason == "CROSS_SECTION_EMPTY"):
+            raise ValueError("empty coverage must use CROSS_SECTION_EMPTY")
+        return self
+
+
+def calculate_feature_coverage(
+    feature_code: str,
+    values: Mapping[str, Decimal | None],
+) -> FeatureCoverage:
+    candidate_count = len(values)
+    valid_count = sum(value is not None for value in values.values())
+    coverage_ratio = (
+        Decimal(valid_count) / Decimal(candidate_count) if candidate_count else Decimal(0)
+    )
+    return FeatureCoverage(
+        feature_code=feature_code,
+        candidate_count=candidate_count,
+        valid_count=valid_count,
+        coverage_ratio=coverage_ratio.quantize(_QUANTUM),
+        missing_reason="CROSS_SECTION_EMPTY" if valid_count == 0 else None,
+    )
+
+
+def percentile_ranks(values: Mapping[str, Decimal]) -> dict[str, Decimal]:
+    if not values:
+        raise CrossSectionEmptyError("CROSS_SECTION_EMPTY")
+    if len(values) == 1:
+        symbol = next(iter(values))
+        return {symbol: Decimal("0.50000000")}
+
+    ordered = sorted(values.items(), key=lambda item: (item[1], item[0]))
+    denominator = Decimal(len(ordered) - 1)
+    ranks: dict[str, Decimal] = {}
+    start = 0
+    while start < len(ordered):
+        end = start
+        while end + 1 < len(ordered) and ordered[end + 1][1] == ordered[start][1]:
+            end += 1
+        average_rank = (Decimal(start + 1) + Decimal(end + 1)) / Decimal(2)
+        percentile = ((average_rank - Decimal(1)) / denominator).quantize(_QUANTUM)
+        for index in range(start, end + 1):
+            ranks[ordered[index][0]] = percentile
+        start = end + 1
+    return {symbol: ranks[symbol] for symbol in sorted(ranks)}
+
+
+def _with_content_hash(snapshot: MarketFeatureSnapshot) -> MarketFeatureSnapshot:
+    payload = snapshot.model_copy(update={"content_hash": ""}).model_dump(mode="json")
+    return snapshot.model_copy(update={"content_hash": sha256_json(payload)})
+
+
+def apply_cross_sectional_features(
+    snapshots: Mapping[str, MarketFeatureSnapshot],
+) -> tuple[dict[str, MarketFeatureSnapshot], dict[str, FeatureCoverage]]:
+    if any(symbol != snapshot.symbol for symbol, snapshot in snapshots.items()):
+        raise ValueError("snapshot mapping key must equal snapshot symbol")
+
+    additions: dict[str, dict[str, FeatureValue]] = {symbol: {} for symbol in snapshots}
+    coverage_by_feature: dict[str, FeatureCoverage] = {}
+    for source_code, output_code in _CROSS_SECTIONAL_FEATURES:
+        source_values: dict[str, Decimal | None] = {}
+        for symbol, snapshot in snapshots.items():
+            source = snapshot.values.get(source_code)
+            if source is None:
+                raise ValueError(f"{source_code} missing for {symbol}")
+            source_values[symbol] = source.value
+
+        coverage = calculate_feature_coverage(source_code, source_values)
+        coverage_by_feature[source_code] = coverage
+        valid_values = {
+            symbol: value for symbol, value in source_values.items() if value is not None
+        }
+        ranks = percentile_ranks(valid_values) if valid_values else {}
+        for symbol, snapshot in snapshots.items():
+            source = snapshot.values[source_code]
+            value = ranks.get(symbol)
+            if value is not None:
+                missing_reason = None
+            elif coverage.valid_count == 0:
+                missing_reason = "CROSS_SECTION_EMPTY"
+            else:
+                missing_reason = source.missing_reason or "CROSS_SECTION_VALUE_MISSING"
+            additions[symbol][output_code] = FeatureValue(
+                feature_code=output_code,
+                feature_version="cross-sectional-v1",
+                as_of=source.as_of,
+                lookback_window=source.lookback_window,
+                value=value,
+                missing_reason=missing_reason,
+                source_snapshot_hash=source.source_snapshot_hash,
+            )
+
+    enriched: dict[str, MarketFeatureSnapshot] = {}
+    for symbol in sorted(snapshots):
+        snapshot = snapshots[symbol]
+        updated = snapshot.model_copy(update={"values": {**snapshot.values, **additions[symbol]}})
+        enriched[symbol] = _with_content_hash(updated)
+    return enriched, coverage_by_feature
 
 
 def _sample_standard_deviation(values: list[Decimal]) -> Decimal:
@@ -199,5 +325,4 @@ def build_market_feature_snapshot(
         values=values,
         content_hash="0" * 64,
     )
-    content_hash = sha256_json(unhashed.model_copy(update={"content_hash": ""}).model_dump(mode="json"))
-    return unhashed.model_copy(update={"content_hash": content_hash})
+    return _with_content_hash(unhashed)
