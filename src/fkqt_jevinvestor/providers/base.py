@@ -5,6 +5,10 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from fkqt_jevinvestor.domain.enums import ProviderStatus
+from fkqt_jevinvestor.domain.decision import (
+    DecisionEvaluationCommand,
+    DecisionProviderResult,
+)
 from fkqt_jevinvestor.domain.evidence import MinimalEvidenceSnapshot
 from fkqt_jevinvestor.domain.factors import SemanticFactorBatch
 from fkqt_jevinvestor.domain.jev_market import JevEvaluationCommand, JevEvaluationV1
@@ -73,4 +77,12 @@ class JevMarketProvider(Protocol):
         ...
 
     async def health(self) -> ProviderHealth:
+        ...
+
+
+class DecisionLlmProvider(Protocol):
+    async def evaluate(
+        self,
+        command: DecisionEvaluationCommand,
+    ) -> DecisionProviderResult:
         ...
