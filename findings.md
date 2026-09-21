@@ -144,3 +144,15 @@
 15. 独立整分支审查发现 1 个 Critical、10 个 Important 和 2 个 Minor。Critical/Important 已进入一次集中修复：日频 cutoff 必须达到中国市场 15:00 且带时区；数据库统一写入 UTC；原特征快照哈希持久化；缺行情和陈旧行情输出稳定缺失；补齐 4 个设计特征；固定 Decimal precision/rounding；Manifest 强制冻结候选池和来源审计；交易日历必须逐日完整；TargetProvider 无法访问 D+1 行情。
 16. 审查修复直接相关测试分三组运行：单元 15 passed、Adapter Contract 10 passed、Phase 2 集成 10 passed；Ruff 全量通过，Pyright 0 errors/0 warnings。
 17. 两个 Minor 延后：Pydantic frozen 模型内部 Mapping 仍可变；快照文件尚未采用临时文件加原子发布。两项不会绕过当前哈希校验，但应在下一次存储加固任务处理。
+
+## Phase 3 Jev 行情盈亏概率（2026-09-21）
+
+1. Phase 3 使用 `JevUniverseStateV1` 与 `JevSymbolStateV1` 两层状态；候选池状态不包含单票历史或账户数据，个股状态不包含 `HELD_ONLY` 标记。
+2. 候选容量由每次运行的 `candidate_limit` 显式给出；队列外持仓参与个股评估但不计容量，也不进入候选池横截面聚合。
+3. Jev 只回答候选池风险与个股 1 日盈亏、5 日盈亏、5 日回撤、5 日盈亏不对称和数据充分度的 Choice 概率，不再实现因子权重。
+4. 未来真实标签由 Decimal 代码从 D+1 开盘和 D+1 至 D+5 冻结行情计算；D+1 成交量或成交额为 0 被视为不可成交，返回 `LABEL_UNAVAILABLE`。
+5. TypeSafe 新 Provider 与旧新闻语义 Provider 隔离；契约错误只保存清理后响应哈希，外部异常只公开异常类型。
+6. `formal_key` 跨运行复用正式结果，`run_id` 通过独立 RunLink 审计；成功缓存命中不新增 Attempt，失败重试序号递增。
+7. Phase 3 新增数据库 Revision `0006_phase3_jev_pnl_probabilities` 和四张表：Evaluation、Attempt、QuestionResult、RunLink。
+8. C 组编排按候选池一次、证券排序逐一评估；必要特征缺失、Provider 不可用和响应契约无效都保存无概率失败结果，不退化到其他实验组。
+9. 新 Live Contract Probe 使用合成状态，并由 `RUN_LIVE_JEV_TESTS=1` 与 `TYPESAFE_API_KEY` 双门控；默认离线执行不访问外部服务。
