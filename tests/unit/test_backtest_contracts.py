@@ -11,6 +11,9 @@ from fkqt_jevinvestor.domain.backtest import (
     TargetPositionBatch,
     TargetProvider,
 )
+from fkqt_jevinvestor.services.frozen_c_group_target import (
+    FrozenCGroupTargetProvider,
+)
 
 
 def test_experiment_arm_has_canonical_names_without_removing_legacy_names() -> None:
@@ -50,3 +53,7 @@ def test_target_provider_decision_view_cannot_access_d_plus_one_market() -> None
     assert isinstance(decision_view, DecisionReplayDay)
     assert not hasattr(decision_view, "execution_market")
     assert get_type_hints(TargetProvider.build_targets)["day"] is DecisionReplayDay
+    assert (
+        get_type_hints(FrozenCGroupTargetProvider.build_targets)["day"]
+        is DecisionReplayDay
+    )
