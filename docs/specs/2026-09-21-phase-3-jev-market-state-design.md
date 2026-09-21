@@ -2,7 +2,7 @@
 
 日期：2026-09-21
 
-状态：待用户书面复核
+状态：用户已确认
 
 需求基线：`REQUIREMENTS.md` v0.4（R7、R8、R10、R12、R14、R21、R23、R24、R26、R27、R29、R33、R37—R43）
 
@@ -70,7 +70,6 @@ Python 确定性特征
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
-| `run_id` | UUID | 正式运行标识 |
 | `decision_date` | date | 决策交易日 D |
 | `decision_cutoff` | datetime | 必须带时区；所有输入均不得晚于该时间 |
 | `candidate_universe_id` | str | 冻结候选池标识 |
@@ -87,6 +86,7 @@ Python 确定性特征
 - Decimal 以规范化字符串传输，不使用二进制浮点序列化。
 - 映射字段按键排序；数组顺序必须由领域规则固定。
 - 同一 `input_hash + provider + model + question_set_version` 的正式调用幂等。
+- `run_id` 只保存为正式运行与评估结果的审计关联，不进入 Jev State、`input_hash` 或正式结果键；相同冻结输入可以跨运行复用概率。
 
 ### 4.2 候选池级输入 `JevUniverseStateV1`
 
@@ -269,6 +269,8 @@ class JevSymbolStateProvider(Protocol):
 - `input_hash`、`raw_response_hash`；
 - 调用状态、错误码、开始时间、结束时间和延迟；
 - `AVAILABLE` 时的完整概率分布与派生标签。
+
+每个使用该结果的正式运行另存 `run_id → formal_key` 关联。缓存命中不新增 Provider Attempt，但必须新增或幂等复用运行关联，保证能够从任一正式运行追溯到实际使用的概率。
 
 原始请求和响应只保存经过 Secret 清理的 canonical JSON 或内容寻址引用。API Key、Authorization Header、SDK 内部凭证和数据库凭据不得进入数据库、日志、异常文本或 API 响应。
 
