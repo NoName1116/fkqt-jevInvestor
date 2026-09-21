@@ -232,3 +232,54 @@ class NavRecord(Base):
     daily_return: Mapped[Decimal] = mapped_column(RATIO)
     cumulative_return: Mapped[Decimal] = mapped_column(RATIO)
     max_drawdown: Mapped[Decimal] = mapped_column(RATIO)
+
+
+class MarketSnapshotRecord(Base):
+    __tablename__ = "ai_signal_market_snapshot"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_date",
+            "content_hash",
+            name="uq_ai_signal_market_snapshot_date_hash",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    decision_date: Mapped[date] = mapped_column(Date)
+    decision_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    next_trade_date: Mapped[date] = mapped_column(Date)
+    universe_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    storage_path: Mapped[str] = mapped_column(String(1024))
+    source_manifests: Mapped[list[str]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MarketFeatureRecord(Base):
+    __tablename__ = "ai_signal_market_feature"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_snapshot_id",
+            "symbol",
+            "feature_code",
+            "feature_version",
+            name="uq_ai_signal_market_feature_identity",
+        ),
+        CheckConstraint(
+            "(value IS NULL) != (missing_reason IS NULL)",
+            name="feature_value_xor_missing_reason",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    market_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_market_snapshot.id", ondelete="CASCADE")
+    )
+    symbol: Mapped[str] = mapped_column(String(16))
+    feature_code: Mapped[str] = mapped_column(String(64))
+    feature_version: Mapped[str] = mapped_column(String(64))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lookback_window: Mapped[int] = mapped_column(Integer)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    missing_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_snapshot_hash: Mapped[str] = mapped_column(String(64))
