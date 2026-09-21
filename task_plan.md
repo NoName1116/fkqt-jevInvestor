@@ -37,7 +37,7 @@
 | P29 | 冻结 Phase 4 LLM 与仓位设计 | 用户确认 DeepSeek 与完整架构 | 正式设计文档 | 已完成 |
 | P30 | 编写 Phase 4 实施计划 | 已批准 Phase 4 设计 | 逐文件、逐测试、逐提交计划 | 已完成 |
 | P31 | 实施 Phase 4 | 已批准实施计划 | C 组离散动作、确定性仓位、审计与冻结重放 | 已完成 |
-| P32 | Phase 4 最终验收 | Phase 4 全部分支改动 | 离线测试、静态检查、迁移往返、Secret 扫描和独立审查 | 进行中 |
+| P32 | Phase 4 最终验收 | Phase 4 全部分支改动 | 离线测试、静态检查、迁移往返、Secret 扫描和独立审查 | 已完成 |
 
 ## Phase 0 验收记录
 
@@ -92,3 +92,14 @@ Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收
 - 审查修复后静态与迁移复验：Ruff 全通过，Pyright 0 错误/0 警告，Alembic 最终仍为 `0006_phase3_jev_pnl_probabilities (head)`。
 - 当前停止点：Phase 3 只产出 Jev 概率和校准标签，尚不产出交易动作；正式 C 组回测和前向信号仍需 Phase 4 的 LLM 离散动作与确定性仓位层。
 - 第二轮独立审查修复：State v1 改为完整字段与覆盖数值契约，Evaluation 租约改为数据库 CAS；定点回归与静态检查通过，等待审查者最终复核。
+
+## Phase 4 验收记录
+
+- 完整离线套件唯一一次运行：`271 passed, 1 failed, 3 deselected`；唯一失败是旧迁移 head 断言，修正后只重跑失败项得到 `1 passed`，有效离线测试为 272 项通过、3 个 live 测试未执行。
+- 首轮静态修复后受影响回归：`75 passed`；独立审查修复后核心受影响回归：`60 passed`；Phase 2 完整 23 特征兼容回归：C 组 `9 passed`。
+- Ruff：`All checks passed!`；Pyright：`0 errors, 0 warnings, 0 informations`。
+- Alembic：临时库完成 `0007 → 0006 → 0007` 往返，最终为 `0007_phase4_llm_position_sizing (head)`；最终迁移定向测试 `2 passed`，新增字段断言复验 `1 passed`。
+- Secret 扫描：实际 API Key、Bearer Token 和 Secret 赋值匹配 0 个。
+- DeepSeek SDK：`max_retries=0`，默认 `deepseek-flash`、`reasoning_effort=high`；Base URL、模型和推理强度进入正式键与数据库审计。
+- 独立审查：首轮 9 个 Important 与 3 个 Minor；9 个 Important 全部关闭，另修复嵌套 refusal 与 Decimal context，数据库到冻结目标的一键导出 CLI 作为 Phase 5 非阻断项记录。
+- 最终独立复核：当前 HEAD `7ab7193`，结论 `Ready to merge: Yes`，无剩余阻断项。
