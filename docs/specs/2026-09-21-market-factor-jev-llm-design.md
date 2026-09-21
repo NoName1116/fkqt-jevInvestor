@@ -6,7 +6,7 @@
 
 适用范围：独立仓库初始化、Phase 0/1 迁移、Phase 2 至 Phase 6
 
-需求基线：`REQUIREMENTS.md` v0.2
+需求基线：`REQUIREMENTS.md` v0.3
 
 ## 1. 执行摘要
 
@@ -48,7 +48,7 @@
 │   └─ 趋势、动量、反转、波动、成交、流动性、跳空、横截面       │
 │                         ▼                                    │
 │ Jev Probability Provider                                     │
-│   └─ 市场状态、趋势延续、成交确认、过热风险、数据充分度        │
+│   └─ 候选池风险、个股方向、趋势延续、成交确认、过热风险        │
 │                         ▼                                    │
 │ Decision LLM Provider                                        │
 │   └─ ENTER / KEEP / EXIT / AVOID / NO_SIGNAL                 │
@@ -140,16 +140,24 @@ class MarketDataProvider(Protocol):
 
 ## 6. Jev 概率层
 
-Jev 读取压缩后的结构化特征，不读取长 K 线数组，不读取新闻正文，不计算技术指标。第一版拆成独立窄问题：
+Phase 3 详细契约以 `docs/specs/2026-09-21-phase-3-jev-market-state-design.md` 为准。Jev 输入拆为每天复用一次的候选池级 `JevUniverseStateV1` 和按证券调用的个股级 `JevSymbolStateV1`。Jev 读取压缩后的结构化特征，不读取长 K 线数组、新闻正文、持仓、现金或历史模型决策，也不计算技术指标。
 
-- `trend_regime`：`UP/RANGE/DOWN`；
-- `momentum_persistence`：`CONTINUE/UNCERTAIN/REVERSE`；
+候选池级问题：
+
+- `universe_risk_regime`：`RISK_ON/NEUTRAL/RISK_OFF`。
+
+个股级窄问题：
+
+- `direction_regime`：`UP/RANGE/DOWN`；
+- `trend_persistence`：`CONTINUE/UNCERTAIN/REVERSE`；
 - `volume_confirmation`：`CONFIRMED/AMBIGUOUS/REJECTED`；
 - `overheat_risk`：`LOW/MEDIUM/HIGH`；
 - `factor_conflict`：`LOW/MEDIUM/HIGH`；
 - `data_sufficiency`：`SUFFICIENT/LIMITED/INSUFFICIENT`。
 
-输出必须保存完整概率分布、问题版本、模型标识、请求哈希、响应哈希、延迟、费用和状态。凭据缺失、超时、限流或响应不完整时记录 `PROVIDER_UNAVAILABLE`，不得写入 Mock 概率。
+这些概率表达对当前状态及其延续倾向的分类判断，不得解释为真实未来涨跌概率。输出必须保存完整概率分布、问题版本、判定标准版本、模型标识、请求哈希、响应哈希、延迟和状态。凭据缺失、超时或限流记录 `PROVIDER_UNAVAILABLE`；Schema 或概率无效记录 `CONTRACT_INVALID`；必要输入不足记录 `DATA_UNAVAILABLE`。失败状态不得包含合成概率。
+
+Jev 不输出连续因子权重、仓位、收益率、价格或交易动作。动态权重如有需要，只能由版本化确定性代码将候选池状态概率映射到预定义权重 Profile。
 
 ## 7. LLM 离散决策
 
@@ -207,7 +215,7 @@ Record Replay 只读冻结记录，不调用 FKQT、Jev 或 LLM。Model Re-evalu
 |---|---|---|
 | A | 确定性因子 → LLM → 仓位引擎 | 无 Jev 的 LLM 基线 |
 | B | 确定性因子 → Jev → LLM → 仓位引擎 | 测量 Jev 增量 |
-| C | 确定性因子 → Jev 直接方向 → 仓位引擎 | 测量最终 LLM 增量 |
+| C | 确定性因子 → Jev 概率 → 确定性动作映射 → 仓位引擎 | 测量最终 LLM 增量 |
 | D | 确定性因子 → 规则方向 → 仓位引擎 | 纯确定性基线 |
 
 四组固定候选池、行情快照、截止时间、仓位公式、交易成本、执行规则和评估区间。Jev 或 LLM 只有在样本外数据上相对 D 组产生可重复增量才保留。
@@ -245,7 +253,7 @@ Phase 2 的第一个交付必须冻结 `backtest-contract-v1`：核心团队提�
 
 ### Phase 3：Jev 行情概率
 
-实现 Jev 窄问题、概率持久化、失败语义、调用审计和真实凭据门控测试。
+实现候选池级与个股级 Jev 状态、窄问题、概率持久化、失败语义、调用审计和真实凭据门控测试。候选池状态在同一正式运行中只调用一次并供全部个股复用；个股状态按证券独立调用。
 
 ### Phase 4：LLM 离散动作与仓位引擎
 
