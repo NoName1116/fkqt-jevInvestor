@@ -1,0 +1,234 @@
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from fkqt_jevinvestor.persistence.base import Base
+
+
+class ProviderCallRecord(Base):
+    __tablename__ = "ai_signal_provider_call"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64))
+    operation: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response_hash: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(128))
+    request_id: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32))
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SchemaVersionRecord(Base):
+    __tablename__ = "ai_signal_schema_version"
+    __table_args__ = (UniqueConstraint("component", "version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    component: Mapped[str] = mapped_column(String(64))
+    version: Mapped[str] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+MONEY = Numeric(20, 4)
+COST = Numeric(24, 8)
+RATIO = Numeric(12, 8)
+
+
+class PortfolioRecord(Base):
+    __tablename__ = "ai_signal_portfolio"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    base_currency: Mapped[str] = mapped_column(String(3))
+    initial_cash: Mapped[Decimal] = mapped_column(MONEY)
+    cash_balance: Mapped[Decimal] = mapped_column(MONEY)
+    frozen_cash: Mapped[Decimal] = mapped_column(MONEY)
+    realized_pnl: Mapped[Decimal] = mapped_column(MONEY)
+    status: Mapped[str] = mapped_column(String(16))
+    version: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PositionRecord(Base):
+    __tablename__ = "ai_signal_position"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "symbol", name="uq_ai_signal_position_symbol"),
+        CheckConstraint("quantity >= 0", name="quantity_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    symbol: Mapped[str] = mapped_column(String(16))
+    quantity: Mapped[int] = mapped_column(BigInteger)
+    average_cost: Mapped[Decimal] = mapped_column(COST)
+    total_cost: Mapped[Decimal] = mapped_column(COST)
+    last_price: Mapped[Decimal] = mapped_column(MONEY)
+    target_position_pct: Mapped[Decimal] = mapped_column(RATIO)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PositionLotRecord(Base):
+    __tablename__ = "ai_signal_position_lot"
+    __table_args__ = (
+        CheckConstraint("remaining_quantity >= 0", name="remaining_quantity_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    position_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_position.id"))
+    symbol: Mapped[str] = mapped_column(String(16))
+    acquired_on: Mapped[date] = mapped_column(Date)
+    remaining_quantity: Mapped[int] = mapped_column(BigInteger)
+    unit_cost: Mapped[Decimal] = mapped_column(COST)
+    total_cost: Mapped[Decimal] = mapped_column(COST)
+
+
+class SignalBatchRecord(Base):
+    __tablename__ = "ai_signal_signal_batch"
+    __table_args__ = (
+        UniqueConstraint(
+            "portfolio_id",
+            "decision_date",
+            "fixture_version",
+            name="uq_ai_signal_signal_batch_fixture",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    decision_date: Mapped[date] = mapped_column(Date)
+    fixture_version: Mapped[str] = mapped_column(String(40))
+    cash_target_pct: Mapped[Decimal] = mapped_column(RATIO)
+    status: Mapped[str] = mapped_column(String(16))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    decision_snapshot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("ai_signal_portfolio_snapshot.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SignalRecord(Base):
+    __tablename__ = "ai_signal_signal"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "symbol", name="uq_ai_signal_signal_symbol"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_signal_batch.id"))
+    symbol: Mapped[str] = mapped_column(String(16))
+    action: Mapped[str] = mapped_column(String(16))
+    target_position_pct: Mapped[Decimal] = mapped_column(RATIO)
+    confidence: Mapped[Decimal] = mapped_column(RATIO)
+    thesis: Mapped[str] = mapped_column(String(1000))
+    invalidation: Mapped[str] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class VirtualOrderRecord(Base):
+    __tablename__ = "ai_signal_virtual_order"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_ai_signal_virtual_order_idempotency"),
+        CheckConstraint("intended_quantity >= 0", name="intended_quantity_nonnegative"),
+        CheckConstraint("filled_quantity >= 0", name="filled_quantity_nonnegative"),
+        CheckConstraint("remaining_quantity >= 0", name="remaining_quantity_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    signal_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_signal.id"))
+    symbol: Mapped[str] = mapped_column(String(16))
+    side: Mapped[str] = mapped_column(String(8))
+    action: Mapped[str] = mapped_column(String(16))
+    target_position_pct: Mapped[Decimal] = mapped_column(RATIO)
+    planned_execution_date: Mapped[date] = mapped_column(Date)
+    policy_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(32))
+    status_code: Mapped[str | None] = mapped_column(String(64))
+    intended_quantity: Mapped[int] = mapped_column(BigInteger)
+    filled_quantity: Mapped[int] = mapped_column(BigInteger)
+    remaining_quantity: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class VirtualFillRecord(Base):
+    __tablename__ = "ai_signal_virtual_fill"
+    __table_args__ = (
+        UniqueConstraint("order_id", "fill_sequence", name="uq_ai_signal_virtual_fill_sequence"),
+        CheckConstraint("quantity > 0", name="quantity_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_virtual_order.id"))
+    fill_sequence: Mapped[int] = mapped_column(Integer)
+    symbol: Mapped[str] = mapped_column(String(16))
+    side: Mapped[str] = mapped_column(String(8))
+    quantity: Mapped[int] = mapped_column(BigInteger)
+    raw_open_price: Mapped[Decimal] = mapped_column(MONEY)
+    fill_price: Mapped[Decimal] = mapped_column(MONEY)
+    gross_value: Mapped[Decimal] = mapped_column(MONEY)
+    commission: Mapped[Decimal] = mapped_column(MONEY)
+    stamp_tax: Mapped[Decimal] = mapped_column(MONEY)
+    total_fees: Mapped[Decimal] = mapped_column(MONEY)
+    trade_date: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PortfolioSnapshotRecord(Base):
+    __tablename__ = "ai_signal_portfolio_snapshot"
+    __table_args__ = (
+        UniqueConstraint(
+            "portfolio_id",
+            "snapshot_type",
+            "as_of",
+            name="uq_ai_signal_portfolio_snapshot",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    snapshot_type: Mapped[str] = mapped_column(String(32))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cash_balance: Mapped[Decimal] = mapped_column(MONEY)
+    frozen_cash: Mapped[Decimal] = mapped_column(MONEY)
+    market_value: Mapped[Decimal] = mapped_column(MONEY)
+    total_equity: Mapped[Decimal] = mapped_column(MONEY)
+    realized_pnl: Mapped[Decimal] = mapped_column(MONEY)
+    unrealized_pnl: Mapped[Decimal] = mapped_column(MONEY)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    details_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class NavRecord(Base):
+    __tablename__ = "ai_signal_nav"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "valuation_date", name="uq_ai_signal_nav_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    valuation_date: Mapped[date] = mapped_column(Date)
+    total_equity: Mapped[Decimal] = mapped_column(MONEY)
+    unit_nav: Mapped[Decimal] = mapped_column(RATIO)
+    daily_return: Mapped[Decimal] = mapped_column(RATIO)
+    cumulative_return: Mapped[Decimal] = mapped_column(RATIO)
+    max_drawdown: Mapped[Decimal] = mapped_column(RATIO)
