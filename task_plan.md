@@ -86,4 +86,4 @@ Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收
 - 独立审查：首次结论为 `No`，1 个 Critical 与 7 个 Important 均已修复；修复后 Phase 3 定向回归 `98 passed`，回测契约 `2 passed`。
 - 审查修复后静态与迁移复验：Ruff 全通过，Pyright 0 错误/0 警告，Alembic 最终仍为 `0006_phase3_jev_pnl_probabilities (head)`。
 - 当前停止点：Phase 3 只产出 Jev 概率和校准标签，尚不产出交易动作；正式 C 组回测和前向信号仍需 Phase 4 的 LLM 离散动作与确定性仓位层。
-- 第二轮独立审查修复：State v1 改为完整字段契约，Evaluation 租约改为数据库 CAS；定点回归与静态检查通过，等待审查者最终复核。
+- 第二轮独立审查修复：State v1 改为完整字段与覆盖数值契约，Evaluation 租约改为数据库 CAS；定点回归与静态检查通过，等待审查者最终复核。

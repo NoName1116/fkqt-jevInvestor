@@ -337,7 +337,9 @@ def test_universe_state_requires_complete_metric_and_coverage_contract() -> None
         "missing_reasons": (),
     }
     assert set(coverage) == JEV_UNIVERSE_COVERAGE_FIELDS
-    JevUniverseStateV1(header=_header(), metrics=metrics, coverage=coverage)
+    JevUniverseStateV1(
+        header=_header(candidate_actual_size=1), metrics=metrics, coverage=coverage
+    )
 
     with pytest.raises(ValueError, match="JEV_STATE_METRIC_FIELDS_INVALID"):
         JevUniverseStateV1(
@@ -345,3 +347,50 @@ def test_universe_state_requires_complete_metric_and_coverage_contract() -> None
             metrics={"advance_ratio": Decimal(1)},
             coverage=coverage,
         )
+
+
+@pytest.mark.parametrize(
+    "coverage",
+    [
+        {
+            "eligible_symbol_count": 99,
+            "missing_symbol_count": -87,
+            "coverage_ratio": Decimal(2),
+            "missing_reasons": (),
+        },
+        {
+            "eligible_symbol_count": 11,
+            "missing_symbol_count": 0,
+            "coverage_ratio": Decimal(1),
+            "missing_reasons": (),
+        },
+        {
+            "eligible_symbol_count": 11,
+            "missing_symbol_count": 1,
+            "coverage_ratio": Decimal("0.91666666"),
+            "missing_reasons": (),
+        },
+    ],
+)
+def test_universe_state_rejects_inconsistent_coverage(
+    coverage: dict[str, int | Decimal | tuple[str, ...] | None],
+) -> None:
+    with pytest.raises(ValueError, match="JEV_STATE_COVERAGE_VALUES_INVALID"):
+        JevUniverseStateV1(
+            header=_header(),
+            metrics={code: Decimal(0) for code in JEV_UNIVERSE_METRIC_FIELDS},
+            coverage=coverage,
+        )
+
+
+def test_empty_universe_requires_none_coverage_ratio() -> None:
+    JevUniverseStateV1(
+        header=_header(candidate_actual_size=0),
+        metrics={code: None for code in JEV_UNIVERSE_METRIC_FIELDS},
+        coverage={
+            "eligible_symbol_count": 0,
+            "missing_symbol_count": 0,
+            "coverage_ratio": None,
+            "missing_reasons": (),
+        },
+    )

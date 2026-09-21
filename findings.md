@@ -174,3 +174,4 @@
 25. 第二轮独立审查指出 State 只限制“不得多字段”但未限制“不得少字段”；现已要求 Universe metrics/coverage 与 Symbol security 字段全集完整，并要求缺失特征与 `missing_reasons` 一一对应，特征计数与实际字段数一致。
 26. Evaluation 主记录现保存当前 owner token 和租约截止时间；过期接管、成功提交和失败提交都使用数据库条件 `UPDATE` 作为 CAS 裁决。两个 worker 并发抢占时只有一个获得新 Attempt，租约已过期的旧 owner 无法同时写入终态。
 27. 第二轮修复定点验证：State/Provider/Repository 受影响测试 44 项通过；Repository、C 组 Service 与 Phase 3 迁移回归 19 项通过；新增过期租约并发测试 3 项通过。Ruff 全通过，Pyright 0 errors/0 warnings。
+28. 最终复核补充发现 Universe coverage 可能字段齐全但数值矛盾；现已要求计数非负、计数和等于候选实际数量、覆盖率处于 0—1 且与计数一致、缺失数量与缺失原因相互一致，空候选池只能使用 `coverage_ratio=None`。相关 State/Builder/Provider/Service 定点回归 57 项通过。

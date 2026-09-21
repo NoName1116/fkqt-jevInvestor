@@ -163,6 +163,39 @@ class JevUniverseStateV1(BaseModel):
             raise ValueError("JEV_STATE_METRIC_FIELDS_INVALID")
         if set(self.coverage) != set(JEV_UNIVERSE_COVERAGE_FIELDS):
             raise ValueError("JEV_STATE_COVERAGE_FIELDS_INVALID")
+        eligible = self.coverage["eligible_symbol_count"]
+        missing = self.coverage["missing_symbol_count"]
+        ratio = self.coverage["coverage_ratio"]
+        reasons = self.coverage["missing_reasons"]
+        if (
+            isinstance(eligible, bool)
+            or not isinstance(eligible, int)
+            or eligible < 0
+            or isinstance(missing, bool)
+            or not isinstance(missing, int)
+            or missing < 0
+            or not isinstance(reasons, tuple)
+            or any(not reason for reason in reasons)
+            or eligible + missing != self.header.candidate_actual_size
+        ):
+            raise ValueError("JEV_STATE_COVERAGE_VALUES_INVALID")
+        if self.header.candidate_actual_size == 0:
+            if ratio is not None or eligible != 0 or missing != 0 or reasons:
+                raise ValueError("JEV_STATE_COVERAGE_VALUES_INVALID")
+            return self
+        if (
+            not isinstance(ratio, Decimal)
+            or not ratio.is_finite()
+            or ratio < 0
+            or ratio > 1
+            or ratio
+            != (Decimal(eligible) / Decimal(self.header.candidate_actual_size)).quantize(
+                Decimal("0.00000001")
+            )
+            or (missing == 0 and bool(reasons))
+            or (missing > 0 and not reasons)
+        ):
+            raise ValueError("JEV_STATE_COVERAGE_VALUES_INVALID")
         return self
 
 
