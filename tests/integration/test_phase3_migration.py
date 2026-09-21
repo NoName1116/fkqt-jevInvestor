@@ -4,7 +4,6 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 
-
 PHASE3_TABLES = {
     "ai_signal_jev_evaluation",
     "ai_signal_jev_attempt",

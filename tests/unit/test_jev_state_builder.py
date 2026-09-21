@@ -13,7 +13,6 @@ from fkqt_jevinvestor.domain.market_features import (
 )
 from fkqt_jevinvestor.services.jev_state_builder import build_jev_states
 
-
 REQUIRED_FEATURES = (
     "return_5d",
     "return_20d",
@@ -42,13 +41,13 @@ def _bar(symbol: str) -> DailyBar:
     return DailyBar(
         symbol=symbol,
         trade_date=date(2026, 9, 18),
-        open=Decimal("10"),
+        open=Decimal(10),
         high=Decimal("10.2"),
         low=Decimal("9.8"),
         close=Decimal("10.1"),
-        previous_close=Decimal("10"),
-        volume=Decimal("1000"),
-        amount_cny=Decimal("10000"),
+        previous_close=Decimal(10),
+        volume=Decimal(1000),
+        amount_cny=Decimal(10000),
         adjustment_mode=AdjustmentMode.QFQ,
     )
 
@@ -71,8 +70,8 @@ def _snapshot(symbols: tuple[str, ...]) -> MarketSnapshot:
                 trading_day_status="OPEN",
                 trading_status="TRADING",
                 is_st_or_delisting_risk=False,
-                upper_limit_price=Decimal("11"),
-                lower_limit_price=Decimal("9"),
+                upper_limit_price=Decimal(11),
+                lower_limit_price=Decimal(9),
                 is_initial_no_limit_period=False,
                 corporate_action_status="NONE",
                 market="SSE",

@@ -156,3 +156,10 @@
 7. Phase 3 新增数据库 Revision `0006_phase3_jev_pnl_probabilities` 和四张表：Evaluation、Attempt、QuestionResult、RunLink。
 8. C 组编排按候选池一次、证券排序逐一评估；必要特征缺失、Provider 不可用和响应契约无效都保存无概率失败结果，不退化到其他实验组。
 9. 新 Live Contract Probe 使用合成状态，并由 `RUN_LIVE_JEV_TESTS=1` 与 `TYPESAFE_API_KEY` 双门控；默认离线执行不访问外部服务。
+10. Phase 3 首次完整离线验收为 `192 passed, 1 failed, 2 deselected`；唯一失败是旧迁移链测试仍把 Alembic head 和业务表数量固定为 Phase 2 的 `0005/13`。
+11. 旧迁移断言更新为 Phase 3 的 `0006/17` 后，只重跑该失败项得到 `1 passed`；有效离线结果为 193 项通过、0 项有效失败、2 个 live 测试未执行。
+12. Ruff 首次发现 21 个 Phase 3 风格问题，19 个由安全机械修复完成，2 个手工修正为 `pairwise` 和明确 `IntegrityError`；重跑结果为 `All checks passed!`。
+13. Pyright 在隔离 worktree 中必须显式使用父工作区解释器；最终结果为 `0 errors, 0 warnings, 0 informations`。
+14. Alembic 独立临时 SQLite 完成 `upgrade head → downgrade 0005 → upgrade head`，最终为 `0006_phase3_jev_pnl_probabilities (head)`。
+15. Secret 扫描未发现实际凭据；命中项仅为空 `.env.example`、扫描正则文本和运行手册中的密码管理器占位符。
+16. 旧语义 Provider、新行情 Provider和回测契约兼容测试为 `20 passed`；静态修正涉及的标签、Repository 和编排定点回归为 `37 passed`。

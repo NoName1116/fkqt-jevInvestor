@@ -171,7 +171,9 @@ class JevMarketEvaluationService:
             formal_key=command.formal_key,
             scope=command.scope,
             symbol=(
-                command.state.symbol if command.scope is JevScope.SYMBOL else None
+                command.state.symbol
+                if isinstance(command.state, JevSymbolStateV1)
+                else None
             ),
             status=status,
             results=(),
@@ -187,4 +189,3 @@ class JevMarketEvaluationService:
             latency_ms=0,
             error_code=error_code,
         )
-

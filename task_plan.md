@@ -2,7 +2,7 @@
 
 日期：2026-09-21
 
-当前阶段：独立仓库迁移已完成，下一步是 Phase 2 Task 1 固化回测协作契约
+当前阶段：Phase 3 Jev 行情盈亏概率层已完成，下一步是 Phase 4 LLM 离散动作与确定性仓位集成
 
 | 步骤 | 内容 | 输入 | 输出 | 状态 |
 |---|---|---|---|---|
@@ -32,7 +32,7 @@
 | P24 | 编写 Phase 3 实施计划 | 已确认 Phase 3 设计 | C 组优先的逐文件、逐测试、逐提交计划 | 已完成 |
 | P25 | 实施 Phase 3 Tasks 1—5 | 已确认实施计划 | 契约、State、真实标签、Provider、持久化与 C 组编排 | 已完成 |
 | P26 | 实施 Phase 3 Task 6 | Phase 3 核心实现 | Live 门控测试、运行手册和持久记录 | 已完成 |
-| P27 | Phase 3 Task 7 最终验收 | Phase 3 全部分支改动 | 全量离线测试、静态检查、迁移往返、Secret 扫描和独立审查 | 进行中 |
+| P27 | Phase 3 Task 7 最终验收 | Phase 3 全部分支改动 | 全量离线测试、静态检查、迁移往返、Secret 扫描和独立审查 | 已完成 |
 
 ## Phase 0 验收记录
 
@@ -59,7 +59,7 @@
 - Live Test：有效凭据下已运行，结果为 `1 passed in 1.42s`。
 - 已知非阻断项：Starlette `TestClient` 触发 1 个 AnyIO 弃用 warning，来源为第三方依赖。
 
-## 当前停止点
+## Phase 2 停止点（历史）
 
 Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收得到 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 100 passed/2 failed/1 deselected；两个旧迁移测试修正后单独得到 2 passed。审查修复覆盖防前视、UTC 往返、特征哈希、缺行情覆盖、Windows 时区、遗漏特征、冻结候选池、来源审计、日历完整性、回测决策视图和 Decimal context；直接相关测试 35 项通过。数据库目标 Revision 更新为 `0005_phase2_audit_hardening (head)`。下一步是推送修复、更新 Contract PR，获得非作者 Review 并合并，随后发布不可移动的 `backtest-contract-v1` 标签。
 # Phase 1 Task 8 最终状态（2026-09-21）
@@ -70,3 +70,17 @@ Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收
 - 静态检查：Ruff 通过，Pyright 0 错误。
 - 数据库迁移：`0003_phase1_audit_snapshot (head)`。
 - 交付边界：只生成信号和维护模拟持仓，不接入券商。
+
+## Phase 3 验收记录
+
+- 核心交付：候选池/个股双层 Jev State、确定性未来盈亏标签、TypeSafe 行情 Provider、四表审计持久化和 C 组优先编排。
+- 完整离线测试首次运行：`192 passed, 1 failed, 2 deselected`；唯一失败为旧迁移 head 断言。
+- 失败项修正后定点重跑：`1 passed`；有效离线测试为 193 项通过、0 项有效失败、2 个 live 测试未执行。
+- Ruff：`All checks passed!`。
+- Pyright：`0 errors, 0 warnings, 0 informations`；隔离 worktree 显式使用父工作区 Python 解释器。
+- Alembic：临时库完成 `0006 → 0005 → 0006` 往返，最终为 `0006_phase3_jev_pnl_probabilities (head)`。
+- Secret 扫描：实际 API Key、Bearer Token 和凭据赋值 0 个；只存在空变量、扫描正则与文档占位符。
+- 兼容测试：旧语义 Provider、新行情 Provider和回测契约合计 `20 passed`。
+- 静态修正定点回归：未来标签、Jev Repository 和 C 组编排合计 `37 passed`。
+- 默认 Live Contract Probe：`1 skipped`，未发生外部调用；本阶段不推测真实 Provider 结果。
+- 当前停止点：Phase 3 只产出 Jev 概率和校准标签，尚不产出交易动作；正式 C 组回测和前向信号仍需 Phase 4 的 LLM 离散动作与确定性仓位层。

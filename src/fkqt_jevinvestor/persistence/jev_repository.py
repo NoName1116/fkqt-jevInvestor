@@ -3,7 +3,7 @@ import hashlib
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +17,7 @@ from fkqt_jevinvestor.domain.jev_market import (
     JevEvaluationV1,
     JevQuestionResultV1,
     JevScope,
+    JevSymbolStateV1,
 )
 from fkqt_jevinvestor.domain.market_time import as_utc
 from fkqt_jevinvestor.persistence.models import (
@@ -86,13 +87,15 @@ def _stable_id(prefix: str, *parts: object) -> str:
 
 def _assert_sanitized(value: object) -> None:
     if isinstance(value, dict):
-        for key, nested in value.items():
+        mapping = cast(dict[object, object], value)
+        for key, nested in mapping.items():
             normalized = str(key).lower().replace("-", "_")
             if normalized in _SENSITIVE_KEYS:
                 raise ValueError("SENSITIVE_STATE_FIELD_FORBIDDEN")
             _assert_sanitized(nested)
     elif isinstance(value, list | tuple):
-        for nested in value:
+        sequence = cast(list[object] | tuple[object, ...], value)
+        for nested in sequence:
             _assert_sanitized(nested)
 
 
@@ -275,7 +278,11 @@ class JevEvaluationRepository:
             id=evaluation_id,
             formal_key=command.formal_key,
             scope=command.scope.value,
-            symbol=(command.state.symbol if command.scope is JevScope.SYMBOL else None),
+            symbol=(
+                command.state.symbol
+                if isinstance(command.state, JevSymbolStateV1)
+                else None
+            ),
             decision_date=command.state.header.decision_date,
             decision_cutoff=as_utc(command.state.header.decision_cutoff),
             state_json=state_json,
@@ -501,4 +508,3 @@ class JevEvaluationRepository:
             latency_ms=attempt.latency_ms,
             error_code=attempt.error_code,
         )
-

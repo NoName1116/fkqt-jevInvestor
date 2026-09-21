@@ -32,22 +32,24 @@ def _bars(
             close=Decimal(closes[index]),
             previous_close=Decimal(open_price if index == 0 else closes[index - 1]),
             volume=Decimal(volume if index == 0 else "1000"),
-            amount_cny=Decimal("10000"),
+            amount_cny=Decimal(10000),
             adjustment_mode=modes[index],
         )
         for index, trade_date in enumerate(dates)
     )
 
 
-def _labels(**overrides: object):
-    arguments = {
-        "decision_date": date(2026, 9, 18),
-        "future_bars": _bars(),
-        "round_trip_cost": Decimal("0"),
-        "source_snapshot_hash": "a" * 64,
-    }
-    arguments.update(overrides)
-    return build_forward_pnl_labels(**arguments)
+def _labels(
+    *,
+    future_bars: tuple[DailyBar, ...] | None = None,
+    round_trip_cost: Decimal = Decimal(0),
+):
+    return build_forward_pnl_labels(
+        decision_date=date(2026, 9, 18),
+        future_bars=_bars() if future_bars is None else future_bars,
+        round_trip_cost=round_trip_cost,
+        source_snapshot_hash="a" * 64,
+    )
 
 
 @pytest.mark.parametrize(
@@ -144,4 +146,3 @@ def test_available_labels_preserve_audit_fields() -> None:
     assert labels.criteria_version == "pnl-label-criteria-v1"
     assert labels.source_snapshot_hash == "a" * 64
     assert labels.missing_reason is None
-

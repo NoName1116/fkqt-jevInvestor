@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
+from itertools import pairwise
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -148,12 +149,13 @@ def build_forward_pnl_labels(
             source_snapshot_hash=source_snapshot_hash,
             missing_reason="D1_EXECUTION_BAR_UNAVAILABLE",
         )
+    first_bar = future_bars[0]
     if len(future_bars) < 5:
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
             missing_reason="FIVE_SESSION_WINDOW_INCOMPLETE",
-            d1_date=future_bars[0].trade_date,
+            d1_date=first_bar.trade_date,
         )
     if len(future_bars) > 5:
         return _unavailable(
@@ -172,7 +174,7 @@ def build_forward_pnl_labels(
             d1_date=d1_date,
             d5_date=d5_date,
         )
-    if any(current >= following for current, following in zip(dates, dates[1:])):
+    if any(current >= following for current, following in pairwise(dates)):
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
@@ -234,4 +236,3 @@ def build_forward_pnl_labels(
         source_snapshot_hash=source_snapshot_hash,
         missing_reason=None,
     )
-

@@ -2,7 +2,7 @@ import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from pydantic import SecretStr, ValidationError
 from typesafe_sdk import AsyncTypeSafeClient
@@ -14,6 +14,7 @@ from fkqt_jevinvestor.domain.jev_market import (
     JevEvaluationV1,
     JevQuestionResultV1,
     JevScope,
+    JevSymbolStateV1,
 )
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
 from fkqt_jevinvestor.providers.base import (
@@ -38,14 +39,16 @@ class SystemOneMarketClient(Protocol):
         ...
 
 
-def _sanitized_response(response: Any) -> dict[str, object]:
-    choices = getattr(response, "choices", None)
+def _sanitized_response(response: object) -> dict[str, object]:
+    raw_choices = getattr(response, "choices", None)
     sanitized_choices: dict[str, object] = {}
-    if isinstance(choices, Mapping):
+    if isinstance(raw_choices, Mapping):
+        choices = cast(Mapping[object, object], raw_choices)
         for question_id, answer in sorted(choices.items(), key=lambda item: str(item[0])):
-            probabilities = getattr(answer, "probabilities", None)
+            raw_probabilities = getattr(answer, "probabilities", None)
             sanitized_probabilities: dict[str, str] = {}
-            if isinstance(probabilities, Mapping):
+            if isinstance(raw_probabilities, Mapping):
+                probabilities = cast(Mapping[object, object], raw_probabilities)
                 sanitized_probabilities = {
                     str(label): str(value)
                     for label, value in sorted(
@@ -130,7 +133,9 @@ class TypeSafeJevMarketProvider:
             formal_key=command.formal_key,
             scope=command.scope,
             symbol=(
-                command.state.symbol if command.scope is JevScope.SYMBOL else None
+                command.state.symbol
+                if isinstance(command.state, JevSymbolStateV1)
+                else None
             ),
             status=JevEvaluationStatus.AVAILABLE,
             results=results,
@@ -163,10 +168,11 @@ class TypeSafeJevMarketProvider:
             raise ProviderContractError("JEV_PROVIDER_CONFIG_MISMATCH")
 
     @staticmethod
-    def _results(response: Any, scope: JevScope) -> tuple[JevQuestionResultV1, ...]:
-        choices = response.choices
-        if not isinstance(choices, Mapping):
+    def _results(response: object, scope: JevScope) -> tuple[JevQuestionResultV1, ...]:
+        raw_choices = getattr(response, "choices", None)
+        if not isinstance(raw_choices, Mapping):
             raise ProviderContractError("JEV_CHOICES_MAPPING_REQUIRED")
+        choices = cast(Mapping[object, object], raw_choices)
         expected = tuple(
             definition
             for definition in QUESTION_DEFINITIONS.values()
@@ -179,9 +185,10 @@ class TypeSafeJevMarketProvider:
         results: list[JevQuestionResultV1] = []
         for definition in expected:
             answer = choices[definition.question_id]
-            probabilities = answer.probabilities
-            if not isinstance(probabilities, Mapping):
+            raw_probabilities = getattr(answer, "probabilities", None)
+            if not isinstance(raw_probabilities, Mapping):
                 raise ProviderContractError("JEV_PROBABILITIES_MAPPING_REQUIRED")
+            probabilities = cast(Mapping[object, object], raw_probabilities)
             distribution = {
                 str(label): Decimal(str(value))
                 for label, value in probabilities.items()
@@ -193,8 +200,7 @@ class TypeSafeJevMarketProvider:
                     criteria_version=definition.criteria_version,
                     label_order=definition.label_order,
                     distribution=distribution,
-                    selected_label=str(answer.choice),
+                    selected_label=str(getattr(answer, "choice", "<missing>")),
                 )
             )
         return tuple(results)
-

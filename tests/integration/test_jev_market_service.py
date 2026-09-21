@@ -1,9 +1,9 @@
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
@@ -18,6 +18,7 @@ from fkqt_jevinvestor.domain.jev_market import (
     JevEvaluationV1,
     JevQuestionResultV1,
     JevScope,
+    JevSymbolStateV1,
 )
 from fkqt_jevinvestor.domain.market_features import (
     AdjustmentMode,
@@ -79,14 +80,14 @@ class FakeProvider:
         if self.failure is not None:
             raise self.failure
         now = datetime(2026, 9, 18, 15, 0, 1, tzinfo=UTC)
-        results = []
+        results: list[JevQuestionResultV1] = []
         for definition in QUESTION_DEFINITIONS.values():
             if definition.scope is not command.scope:
                 continue
             distribution = {
-                label: Decimal("0") for label in definition.label_order
+                label: Decimal(0) for label in definition.label_order
             }
-            distribution[definition.label_order[0]] = Decimal("1")
+            distribution[definition.label_order[0]] = Decimal(1)
             results.append(
                 JevQuestionResultV1(
                     question_id=definition.question_id,
@@ -101,7 +102,11 @@ class FakeProvider:
             evaluation_id=f"jev-{command.formal_key[:24]}",
             formal_key=command.formal_key,
             scope=command.scope,
-            symbol=command.state.symbol if command.scope is JevScope.SYMBOL else None,
+            symbol=(
+                command.state.symbol
+                if isinstance(command.state, JevSymbolStateV1)
+                else None
+            ),
             status=JevEvaluationStatus.AVAILABLE,
             results=tuple(results),
             provider_name=command.provider_name,
@@ -129,20 +134,20 @@ def _bar(symbol: str) -> DailyBar:
     return DailyBar(
         symbol=symbol,
         trade_date=date(2026, 9, 18),
-        open=Decimal("10"),
+        open=Decimal(10),
         high=Decimal("10.2"),
         low=Decimal("9.8"),
         close=Decimal("10.1"),
-        previous_close=Decimal("10"),
-        volume=Decimal("1000"),
-        amount_cny=Decimal("10000"),
+        previous_close=Decimal(10),
+        volume=Decimal(1000),
+        amount_cny=Decimal(10000),
         adjustment_mode=AdjustmentMode.QFQ,
     )
 
 
 def _run_command(
     *,
-    run_id=None,
+    run_id: UUID | None = None,
     missing_symbol: str | None = None,
 ) -> JevRunCommandV1:
     symbols = ("B", "A", "HELD")
@@ -163,8 +168,8 @@ def _run_command(
                 trading_day_status="OPEN",
                 trading_status="TRADING",
                 is_st_or_delisting_risk=False,
-                upper_limit_price=Decimal("11"),
-                lower_limit_price=Decimal("9"),
+                upper_limit_price=Decimal(11),
+                lower_limit_price=Decimal(9),
                 is_initial_no_limit_period=False,
                 corporate_action_status="NONE",
                 market="SSE",
@@ -179,7 +184,7 @@ def _run_command(
     )
     features: dict[str, MarketFeatureSnapshot] = {}
     for symbol in symbols:
-        values = {}
+        values: dict[str, FeatureValue] = {}
         for index, code in enumerate(REQUIRED_SYMBOL_FEATURES, start=1):
             is_missing = symbol == missing_symbol and code == "return_60d"
             values[code] = FeatureValue(

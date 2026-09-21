@@ -10,6 +10,7 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fkqt_jevinvestor.domain.jev_market import (
@@ -186,7 +187,7 @@ async def test_duplicate_question_rolls_back_entire_success(
     duplicate = _question()
     invalid = _result(command_value).model_copy(update={"results": (duplicate, duplicate)})
 
-    with pytest.raises(Exception):
+    with pytest.raises(IntegrityError):
         await repository.record_success(claim, invalid)
 
     assert await _count(session_factory, JevQuestionResultRecord) == 0
@@ -280,4 +281,3 @@ async def test_sensitive_state_key_is_rejected_before_persistence(
         await repository.claim(UUID(int=1), command_value)
 
     assert await _count(session_factory, JevAttemptRecord) == 0
-
