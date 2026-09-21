@@ -10,6 +10,7 @@ from fkqt_jevinvestor.domain.market_features import (
     AdjustmentMode,
     DailyBar,
     MarketSnapshot,
+    MarketSourceAudit,
     SecurityTradeState,
 )
 from fkqt_jevinvestor.ingestion.snapshot_store import (
@@ -48,6 +49,8 @@ def _snapshot(*, bar_date: date) -> MarketSnapshot:
         decision_date=decision_date,
         decision_cutoff=datetime(2026, 9, 18, 15, tzinfo=UTC),
         next_trade_date=date(2026, 9, 21),
+        calendar_complete_through=date(2026, 9, 21),
+        universe_snapshot_id="universe-v1",
         universe_snapshot_hash="a" * 64,
         daily_bars={"600000.SH": (_bar(bar_date),)},
         security_states={
@@ -67,6 +70,19 @@ def _snapshot(*, bar_date: date) -> MarketSnapshot:
             )
         },
         source_manifest_ids=("manifest-v1",),
+        source_audits=(
+            MarketSourceAudit(
+                upstream_type="FIXTURE",
+                upstream_version="v1",
+                request_scope={"symbols": ["600000.SH"]},
+                data_cutoff=datetime(2026, 9, 18, 15, tzinfo=UTC),
+                schema_version="schema-v1",
+                fetched_at=datetime(2026, 9, 18, 15, tzinfo=UTC),
+                record_count=1,
+                raw_snapshot_ref="fixture",
+                content_hash="b" * 64,
+            ),
+        ),
         content_hash="0" * 64,
     )
     return _with_content_hash(snapshot)
@@ -92,3 +108,13 @@ def test_same_snapshot_is_idempotent(tmp_path: Path) -> None:
     assert first == second
     assert len(tuple(tmp_path.rglob("*.json"))) == 1
     assert store.load(valid_snapshot.decision_date, valid_snapshot.content_hash) == valid_snapshot
+
+
+def test_snapshot_rejects_naive_cutoff(tmp_path: Path) -> None:
+    snapshot = _snapshot(bar_date=date(2026, 9, 18)).model_copy(
+        update={"decision_cutoff": datetime(2026, 9, 18, 15, tzinfo=UTC).replace(tzinfo=None)}
+    )
+    snapshot = _with_content_hash(snapshot)
+
+    with pytest.raises(SnapshotValidationError, match="TIMEZONE_REQUIRED"):
+        MarketSnapshotStore(tmp_path).save(snapshot)

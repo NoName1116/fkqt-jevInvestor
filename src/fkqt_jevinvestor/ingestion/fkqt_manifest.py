@@ -1,6 +1,6 @@
 import hashlib
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
@@ -13,11 +13,14 @@ from fkqt_jevinvestor.domain.market_features import (
     AdjustmentMode,
     DailyBar,
     MarketSnapshot,
+    MarketSourceAudit,
     SecurityTradeState,
 )
+from fkqt_jevinvestor.domain.market_time import validate_decision_cutoff
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
 
 REQUIRED_DATASETS = (
+    "candidate_universe",
     "trading_calendar",
     "security_master",
     "security_name_history",
@@ -60,8 +63,10 @@ class FkqtManifestProvider:
         decision_cutoff: datetime,
         lookback_trading_days: int,
     ) -> MarketSnapshot:
-        if decision_cutoff.date() != decision_date:
-            raise FkqtBundleError("POINT_IN_TIME_VIOLATION")
+        try:
+            validate_decision_cutoff(decision_date, decision_cutoff)
+        except ValueError as exc:
+            raise FkqtBundleError("POINT_IN_TIME_VIOLATION") from exc
         if lookback_trading_days <= 0:
             raise FkqtBundleError("INVALID_LOOKBACK_TRADING_DAYS")
         normalized_symbols = tuple(sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()}))
@@ -74,8 +79,14 @@ class FkqtManifestProvider:
             for dataset_type in REQUIRED_DATASETS
         }
         self._validate_volume_unit(manifests["daily_bars"])
+        self._validate_universe(rows["candidate_universe"], normalized_symbols)
 
         next_trade_date = self._next_trade_date(rows["trading_calendar"], decision_date)
+        calendar_complete_through = max(
+            _parse_date(row.get("cal_date"), "CALENDAR_DATE_INVALID")
+            for row in rows["trading_calendar"]
+            if str(row.get("exchange", "")).upper() == "SSE"
+        )
         bars = self._daily_bars(
             rows["daily_bars"],
             normalized_symbols,
@@ -92,13 +103,8 @@ class FkqtManifestProvider:
             bars=bars,
         )
         manifest_ids = tuple(manifests[name].dataset_id for name in REQUIRED_DATASETS)
-        universe_hash = sha256_json(
-            {
-                "decision_date": decision_date.isoformat(),
-                "symbols": normalized_symbols,
-                "source_manifest_ids": manifest_ids,
-            }
-        )
+        universe_manifest = manifests["candidate_universe"]
+        universe_hash = universe_manifest.content_hash
         snapshot_id = sha256_json(
             {
                 "decision_cutoff": decision_cutoff.isoformat(),
@@ -111,10 +117,24 @@ class FkqtManifestProvider:
             decision_date=decision_date,
             decision_cutoff=decision_cutoff,
             next_trade_date=next_trade_date,
+            calendar_complete_through=calendar_complete_through,
+            universe_snapshot_id=universe_manifest.dataset_id,
             universe_snapshot_hash=universe_hash,
             daily_bars=bars,
             security_states=states,
             source_manifest_ids=manifest_ids,
+            source_audits=tuple(
+                self._source_audit(
+                    manifests[name],
+                    decision_cutoff,
+                    request_scope=(
+                        {**manifests[name].request_params, "symbols": list(normalized_symbols)}
+                        if name == "candidate_universe"
+                        else manifests[name].request_params
+                    ),
+                )
+                for name in REQUIRED_DATASETS
+            ),
             content_hash="0" * 64,
         )
         payload = snapshot.model_dump(mode="json")
@@ -178,16 +198,62 @@ class FkqtManifestProvider:
             raise FkqtBundleError("DAILY_VOLUME_UNIT_MISMATCH")
 
     @staticmethod
-    def _next_trade_date(calendar_rows: list[dict[str, object]], current: date) -> date:
-        candidates = sorted(
-            parsed
-            for row in calendar_rows
-            if int(str(row.get("is_open", 0))) == 1
-            if (parsed := _parse_date(row.get("cal_date"), "CALENDAR_DATE_INVALID")) > current
+    def _validate_universe(
+        rows: list[dict[str, object]],
+        expected_symbols: tuple[str, ...],
+    ) -> None:
+        frozen_symbols = tuple(
+            sorted({str(row.get("symbol", "")).strip().upper() for row in rows})
         )
+        if not frozen_symbols or frozen_symbols != expected_symbols:
+            raise FkqtBundleError("UNIVERSE_SYMBOL_MISMATCH")
+
+    @staticmethod
+    def _source_audit(
+        manifest: DatasetManifest,
+        decision_cutoff: datetime,
+        request_scope: Mapping[str, object],
+    ) -> MarketSourceAudit:
+        try:
+            fetched_at = datetime.fromisoformat(manifest.fetched_at)
+        except ValueError as exc:
+            raise FkqtBundleError("DATASET_MANIFEST_INVALID") from exc
+        if fetched_at.tzinfo is None:
+            raise FkqtBundleError("DATASET_MANIFEST_INVALID")
+        return MarketSourceAudit(
+            upstream_type=manifest.source,
+            upstream_version=manifest.dataset_version,
+            request_scope=request_scope,
+            data_cutoff=decision_cutoff,
+            schema_version=manifest.schema_hash,
+            fetched_at=fetched_at,
+            record_count=manifest.row_count,
+            raw_snapshot_ref=manifest.storage_path,
+            content_hash=manifest.content_hash,
+        )
+
+    @staticmethod
+    def _next_trade_date(calendar_rows: list[dict[str, object]], current: date) -> date:
+        calendar: dict[date, int] = {}
+        for row in calendar_rows:
+            if str(row.get("exchange", "")).upper() != "SSE":
+                continue
+            parsed = _parse_date(row.get("cal_date"), "CALENDAR_DATE_INVALID")
+            if parsed in calendar:
+                raise FkqtBundleError("TRADING_CALENDAR_INVALID")
+            calendar[parsed] = int(str(row.get("is_open", 0)))
+        if calendar.get(current) != 1:
+            raise FkqtBundleError("DECISION_DATE_NOT_OPEN")
+        candidates = sorted(day for day, is_open in calendar.items() if is_open == 1 and day > current)
         if not candidates:
             raise FkqtBundleError("NEXT_TRADE_DATE_UNAVAILABLE")
-        return candidates[0]
+        next_trade_date = candidates[0]
+        cursor = current + timedelta(days=1)
+        while cursor <= next_trade_date:
+            if cursor not in calendar:
+                raise FkqtBundleError("TRADING_CALENDAR_INCOMPLETE")
+            cursor += timedelta(days=1)
+        return next_trade_date
 
     @staticmethod
     def _daily_bars(

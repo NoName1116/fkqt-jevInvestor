@@ -248,10 +248,13 @@ class MarketSnapshotRecord(Base):
     decision_date: Mapped[date] = mapped_column(Date)
     decision_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     next_trade_date: Mapped[date] = mapped_column(Date)
+    calendar_complete_through: Mapped[date] = mapped_column(Date)
+    universe_snapshot_id: Mapped[str] = mapped_column(String(128))
     universe_snapshot_hash: Mapped[str] = mapped_column(String(64))
     content_hash: Mapped[str] = mapped_column(String(64))
     storage_path: Mapped[str] = mapped_column(String(1024))
     source_manifests: Mapped[list[str]] = mapped_column(JSON)
+    source_audits: Mapped[list[dict[str, object]]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -283,3 +286,4 @@ class MarketFeatureRecord(Base):
     value: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
     missing_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    feature_snapshot_hash: Mapped[str] = mapped_column(String(64))

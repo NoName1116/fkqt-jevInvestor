@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from fkqt_jevinvestor.domain.market_features import (
     AdjustmentMode,
     DailyBar,
     MarketSnapshot,
+    MarketSourceAudit,
     SecurityTradeState,
 )
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
@@ -76,10 +77,25 @@ def _snapshot(*, future_bar: bool = False) -> MarketSnapshot:
         decision_date=decision_date,
         decision_cutoff=datetime(2026, 9, 25, 15, tzinfo=UTC),
         next_trade_date=date(2026, 9, 28),
+        calendar_complete_through=date(2026, 9, 28),
+        universe_snapshot_id="universe-friday",
         universe_snapshot_hash="a" * 64,
         daily_bars={"600000.SH": bars},
         security_states={"600000.SH": state},
         source_manifest_ids=("manifest-1",),
+        source_audits=(
+            MarketSourceAudit(
+                upstream_type="FIXTURE",
+                upstream_version="v1",
+                request_scope={"symbols": ["600000.SH"]},
+                data_cutoff=datetime(2026, 9, 25, 15, tzinfo=UTC),
+                schema_version="schema-v1",
+                fetched_at=datetime(2026, 9, 25, 15, tzinfo=UTC),
+                record_count=61,
+                raw_snapshot_ref="fixture",
+                content_hash="b" * 64,
+            ),
+        ),
         content_hash="0" * 64,
     )
     payload = unhashed.model_copy(update={"content_hash": ""}).model_dump(mode="json")
@@ -135,3 +151,102 @@ async def test_pipeline_rejects_future_bar_before_database_write(
 
     async with session_factory() as session:
         assert await session.scalar(select(func.count()).select_from(MarketSnapshotRecord)) == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_rejects_same_day_data_before_market_close(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot().model_copy(
+        update={
+            "decision_cutoff": datetime(
+                2026,
+                9,
+                25,
+                9,
+                tzinfo=timezone(timedelta(hours=8)),
+            )
+        }
+    )
+    payload = snapshot.model_copy(update={"content_hash": ""}).model_dump(mode="json")
+    snapshot = snapshot.model_copy(update={"content_hash": sha256_json(payload)})
+    pipeline = MarketPipeline(
+        FakeProvider(snapshot),
+        MarketSnapshotStore(tmp_path / "snapshots"),
+        MarketSnapshotRepository(session_factory),
+    )
+
+    with pytest.raises(ValueError, match="POINT_IN_TIME_VIOLATION"):
+        await pipeline.freeze_and_compute(
+            ("600000.SH",), snapshot.decision_date, snapshot.decision_cutoff
+        )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_missing_symbol_without_aborting_batch(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot()
+    missing_symbol = "000001.SZ"
+    missing_state = snapshot.security_states["600000.SH"].model_copy(
+        update={
+            "symbol": missing_symbol,
+            "trading_status": "SUSPENDED",
+            "missing_reasons": ("DAILY_BARS_MISSING",),
+        }
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "daily_bars": {**snapshot.daily_bars, missing_symbol: ()},
+            "security_states": {**snapshot.security_states, missing_symbol: missing_state},
+            "source_audits": (
+                snapshot.source_audits[0].model_copy(
+                    update={"request_scope": {"symbols": [missing_symbol, "600000.SH"]}}
+                ),
+            ),
+        }
+    )
+    payload = snapshot.model_copy(update={"content_hash": ""}).model_dump(mode="json")
+    snapshot = snapshot.model_copy(update={"content_hash": sha256_json(payload)})
+    pipeline = MarketPipeline(
+        FakeProvider(snapshot),
+        MarketSnapshotStore(tmp_path / "snapshots"),
+        MarketSnapshotRepository(session_factory),
+    )
+
+    _, features = await pipeline.freeze_and_compute(
+        ("600000.SH", missing_symbol),
+        snapshot.decision_date,
+        snapshot.decision_cutoff,
+    )
+
+    assert set(features) == {"600000.SH", missing_symbol}
+    assert features[missing_symbol].values["return_20d"].missing_reason == (
+        "DAILY_BARS_MISSING"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_rejects_source_audit_after_decision_cutoff(
+    session_factory: SessionFactory,
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot()
+    future_audit = snapshot.source_audits[0].model_copy(
+        update={"data_cutoff": snapshot.decision_cutoff + timedelta(minutes=1)}
+    )
+    snapshot = snapshot.model_copy(update={"source_audits": (future_audit,)})
+    payload = snapshot.model_copy(update={"content_hash": ""}).model_dump(mode="json")
+    snapshot = snapshot.model_copy(update={"content_hash": sha256_json(payload)})
+    pipeline = MarketPipeline(
+        FakeProvider(snapshot),
+        MarketSnapshotStore(tmp_path / "snapshots"),
+        MarketSnapshotRepository(session_factory),
+    )
+
+    with pytest.raises(ValueError, match="POINT_IN_TIME_VIOLATION"):
+        await pipeline.freeze_and_compute(
+            ("600000.SH",), snapshot.decision_date, snapshot.decision_cutoff
+        )

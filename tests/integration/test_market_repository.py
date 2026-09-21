@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from fkqt_jevinvestor.domain.market_features import (
     FeatureValue,
     MarketFeatureSnapshot,
     MarketSnapshot,
+    MarketSourceAudit,
 )
 from fkqt_jevinvestor.persistence.market_repository import (
     MarketSnapshotConflict,
@@ -43,10 +44,25 @@ def _inputs(content_hash: str = "b" * 64) -> tuple[MarketSnapshot, dict[str, Mar
         decision_date=date(2026, 9, 18),
         decision_cutoff=datetime(2026, 9, 18, 15, tzinfo=UTC),
         next_trade_date=date(2026, 9, 21),
+        calendar_complete_through=date(2026, 9, 21),
+        universe_snapshot_id="universe-v1",
         universe_snapshot_hash="a" * 64,
         daily_bars={},
         security_states={},
         source_manifest_ids=("manifest-1",),
+        source_audits=(
+            MarketSourceAudit(
+                upstream_type="FIXTURE",
+                upstream_version="v1",
+                request_scope={"symbols": []},
+                data_cutoff=datetime(2026, 9, 18, 15, tzinfo=UTC),
+                schema_version="schema-v1",
+                fetched_at=datetime(2026, 9, 18, 15, tzinfo=UTC),
+                record_count=0,
+                raw_snapshot_ref="fixture",
+                content_hash="e" * 64,
+            ),
+        ),
         content_hash=content_hash,
     )
     feature = FeatureValue(
@@ -101,3 +117,36 @@ async def test_same_snapshot_id_with_different_content_is_rejected_atomically(
     async with session_factory() as session:
         assert await session.scalar(select(func.count()).select_from(MarketSnapshotRecord)) == 1
         assert await session.scalar(select(func.count()).select_from(MarketFeatureRecord)) == 1
+
+
+@pytest.mark.asyncio
+async def test_shanghai_times_and_feature_hash_round_trip_exactly(
+    session_factory: SessionFactory,
+) -> None:
+    snapshot, features = _inputs()
+    shanghai = timezone(timedelta(hours=8))
+    cutoff = datetime(2026, 9, 18, 15, tzinfo=shanghai)
+    snapshot = snapshot.model_copy(update={"decision_cutoff": cutoff})
+    source_feature = features["600000.SH"].values["return_20d"].model_copy(
+        update={"as_of": cutoff.astimezone(UTC)}
+    )
+    feature_snapshot = features["600000.SH"].model_copy(
+        update={"values": {"return_20d": source_feature}}
+    )
+    repository = MarketSnapshotRepository(session_factory)
+
+    first = await repository.save_run_inputs(
+        snapshot,
+        {"600000.SH": feature_snapshot},
+        "data/snapshots/snapshot.json",
+    )
+    second = await repository.save_run_inputs(
+        snapshot,
+        {"600000.SH": feature_snapshot},
+        "data/snapshots/snapshot.json",
+    )
+    loaded = await repository.load_run_inputs(snapshot.decision_date, snapshot.content_hash)
+
+    assert first == second
+    assert loaded.reference.decision_cutoff == cutoff.astimezone(UTC)
+    assert loaded.features["600000.SH"] == feature_snapshot

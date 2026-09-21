@@ -62,6 +62,11 @@ def _write_dataset(root: Path, dataset_type: str, rows: list[dict[str, object]])
 def valid_bundle(tmp_path: Path) -> Path:
     _write_dataset(
         tmp_path,
+        "candidate_universe",
+        [{"symbol": "600000.SH", "universe_version": "fkqt-pool-v1"}],
+    )
+    _write_dataset(
+        tmp_path,
         "trading_calendar",
         [
             {"exchange": "SSE", "cal_date": "20260918", "is_open": 1},
@@ -141,5 +146,57 @@ async def test_valid_bundle_maps_to_auditable_market_snapshot(valid_bundle: Path
         "INITIAL_LIMIT_PERIOD_UNAVAILABLE",
         "PRICE_LIMIT_DATA_UNAVAILABLE",
     )
-    assert len(snapshot.source_manifest_ids) == 5
+    assert snapshot.universe_snapshot_id == hashlib.sha256(
+        b"candidate_universe"
+    ).hexdigest()
+    assert snapshot.universe_snapshot_hash == snapshot.source_audits[0].content_hash
+    assert len(snapshot.source_manifest_ids) == 6
+    assert len(snapshot.source_audits) == 6
+    assert snapshot.source_audits[0].upstream_version == "TUSHARE_PRO_V1"
+    assert snapshot.source_audits[0].request_scope["symbols"] == ["600000.SH"]
     assert len(snapshot.content_hash) == 64
+
+
+async def test_manifest_provider_rejects_symbols_outside_frozen_universe(
+    valid_bundle: Path,
+) -> None:
+    with pytest.raises(FkqtBundleError, match="UNIVERSE_SYMBOL_MISMATCH"):
+        await FkqtManifestProvider(valid_bundle).freeze_snapshot(
+            symbols=("600000.SH", "000001.SZ"),
+            decision_date=date(2026, 9, 18),
+            decision_cutoff=datetime(2026, 9, 18, 15, 30, tzinfo=SHANGHAI),
+            lookback_trading_days=61,
+        )
+
+
+async def test_manifest_provider_rejects_incomplete_calendar_between_d_and_d_plus_one(
+    valid_bundle: Path,
+) -> None:
+    _write_dataset(
+        valid_bundle,
+        "trading_calendar",
+        [
+            {"exchange": "SSE", "cal_date": "20260918", "is_open": 1},
+            {"exchange": "SSE", "cal_date": "20260921", "is_open": 1},
+        ],
+    )
+
+    with pytest.raises(FkqtBundleError, match="TRADING_CALENDAR_INCOMPLETE"):
+        await FkqtManifestProvider(valid_bundle).freeze_snapshot(
+            symbols=("600000.SH",),
+            decision_date=date(2026, 9, 18),
+            decision_cutoff=datetime(2026, 9, 18, 15, 30, tzinfo=SHANGHAI),
+            lookback_trading_days=61,
+        )
+
+
+async def test_manifest_provider_rejects_same_day_pre_close_cutoff(
+    valid_bundle: Path,
+) -> None:
+    with pytest.raises(FkqtBundleError, match="POINT_IN_TIME_VIOLATION"):
+        await FkqtManifestProvider(valid_bundle).freeze_snapshot(
+            symbols=("600000.SH",),
+            decision_date=date(2026, 9, 18),
+            decision_cutoff=datetime(2026, 9, 18, 9, tzinfo=SHANGHAI),
+            lookback_trading_days=61,
+        )

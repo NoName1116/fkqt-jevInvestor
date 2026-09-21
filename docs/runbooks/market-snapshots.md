@@ -2,7 +2,7 @@
 
 日期：2026-09-21
 
-适用版本：Phase 2，数据库 Revision `0004_phase2_market_features`
+适用版本：Phase 2，数据库 Revision `0005_phase2_audit_hardening`
 
 ## 1. 目标与边界
 
@@ -15,7 +15,7 @@
 | 检查项 | 标准值 | 检查方法 | 优先级 |
 |---|---|---|---|
 | Python | 3.12 | `.\.venv\Scripts\python.exe --version` | 必须 |
-| 数据库迁移 | `0004_phase2_market_features (head)` | `.\.venv\Scripts\python.exe -m alembic current` | 必须 |
+| 数据库迁移 | `0005_phase2_audit_hardening (head)` | `.\.venv\Scripts\python.exe -m alembic current` | 必须 |
 | Manifest 版本 | `TUSHARE_PRO_V1` | 检查每个 Manifest 的 `dataset_version` | Manifest 必须 |
 | 日线成交量单位 | `TUSHARE_100_SHARES` | 检查日线 Manifest 的 `request_params.volume_unit` | Manifest 必须 |
 | 决策时间 | D 日 15:00，带时区 | 检查 API 请求或 CLI 固定值 | 必须 |
@@ -30,7 +30,7 @@
 
 ## 3. Manifest bundle 目录
 
-bundle 根目录必须包含 `manifests` 目录以及 Manifest 指向的 Parquet 文件。每个交易日必须恰好提供以下五类数据：
+bundle 根目录必须包含 `manifests` 目录以及 Manifest 指向的 Parquet 文件。每个交易日必须恰好提供以下六类数据：
 
 ```text
 <bundle-root>/
@@ -44,17 +44,18 @@ bundle 根目录必须包含 `manifests` 目录以及 Manifest 指向的 Parquet
     └── <Manifest.storage_path 指向的 Parquet 文件>
 ```
 
-五类 `dataset_type` 必须完整：
+六类 `dataset_type` 必须完整：
 
 | dataset_type | 用途 |
 |---|---|
+| `candidate_universe` | FKQT 冻结候选池成员、版本和哈希 |
 | `trading_calendar` | 判断 D 是否开市并取得 D+1 |
 | `security_master` | 市场、板块、上市日期 |
 | `security_name_history` | ST 和退市风险状态 |
 | `suspension_status` | 停牌状态 |
 | `daily_bars` | 未复权 OHLC、成交量、成交额 |
 
-Manifest 的 `as_of_date` 必须等于决策日的 `YYYYMMDD`，`dataset_id` 必须与文件名一致。系统会验证内容哈希、物理 Schema 哈希、行数、路径边界和数据版本。
+Manifest 的 `as_of_date` 必须等于决策日的 `YYYYMMDD`，`dataset_id` 必须与文件名一致。请求 symbols 必须与 `candidate_universe` 成员完全一致。系统会验证内容哈希、物理 Schema 哈希、行数、路径边界、数据版本以及 D 到 D+1 的逐日历日期覆盖。
 
 ## 4. CLI 冻结行情
 
@@ -163,8 +164,8 @@ data/snapshots/2026-09-25/0123456789abcdef0123456789abcdef0123456789abcdef012345
 
 | 表 | 保存内容 |
 |---|---|
-| `ai_signal_market_snapshot` | 决策日、cutoff、D+1、候选池哈希、内容哈希、文件路径、Manifest IDs |
-| `ai_signal_market_feature` | symbol、特征代码、版本、as-of、lookback、Decimal 值或缺失原因、来源哈希 |
+| `ai_signal_market_snapshot` | 决策日、cutoff、D+1、日历完整边界、候选池 ID/哈希、内容哈希、文件路径、Manifest IDs 和来源审计信封 |
+| `ai_signal_market_feature` | symbol、特征代码、版本、as-of、lookback、Decimal 值或缺失原因、来源哈希和原特征快照哈希 |
 
 数据库不保存完整日线 JSON 或 Parquet。不得单独删除快照文件；否则只能恢复特征和引用，不能恢复原始行情。
 
@@ -200,7 +201,7 @@ await engine.dispose()
 | 错误码 | 含义 | 处理 |
 |---|---|---|
 | `FKQT_MANIFEST_BUNDLE_ROOT_REQUIRED` | CLI 未配置 bundle 根目录 | 设置 `FKQT_MANIFEST_BUNDLE_ROOT` |
-| `DATASET_MANIFEST_MISSING` | 缺少 manifests 目录或必需 Manifest | 补齐五类 Manifest |
+| `DATASET_MANIFEST_MISSING` | 缺少 manifests 目录或必需 Manifest | 补齐六类 Manifest |
 | `DATASET_MANIFEST_AMBIGUOUS` | 同类数据出现多个 Manifest | 每类只保留当前决策日的唯一 Manifest |
 | `DATASET_AS_OF_DATE_MISMATCH` | Manifest 日期不等于 D | 使用对应决策日导出 |
 | `DATASET_HASH_MISMATCH` | Parquet 内容与 Manifest 不一致 | 重新完整导出，不修改原文件 |
@@ -211,6 +212,8 @@ await engine.dispose()
 | `DAILY_VOLUME_UNIT_MISMATCH` | 成交量单位不是 `TUSHARE_100_SHARES` | 修正导出元数据和数据单位 |
 | `POINT_IN_TIME_VIOLATION` | 出现未来数据或 cutoff 不属于 D | 拒绝整批，修复上游数据 |
 | `NEXT_TRADE_DATE_UNAVAILABLE` | 日历没有明确 D+1 | 补齐交易日历，不用自然日推算 |
+| `TRADING_CALENDAR_INCOMPLETE` | D 到 D+1 之间存在日历缺页 | 补齐包含休市日在内的逐日历日期记录 |
+| `UNIVERSE_SYMBOL_MISMATCH` | 请求 symbols 不等于冻结候选池成员 | 使用候选池原始成员集合 |
 | `SYMBOL_COVERAGE_MISMATCH` | 候选池与行情/状态覆盖不一致 | 补齐所有候选证券 |
 | `UPSTREAM_AUTH_FAILED` | REST 认证失败 | 更新 Secret 或权限 |
 | `UPSTREAM_RATE_LIMITED` | REST 限流 | 降低调用频率并按上游策略重试 |
@@ -231,7 +234,7 @@ await engine.dispose()
 | 特征精度 | 8 位 Decimal | 查询 features API | 必须 |
 | 缺失语义 | `value` 与 `missing_reason` 恰有一个 | 查询数据库或 API | 必须 |
 | 横截面范围 | `0.00000000` 至 `1.00000000` | 查询三类 percentile | 必须 |
-| 数据库 Revision | `0004_phase2_market_features (head)` | `alembic current` | 必须 |
+| 数据库 Revision | `0005_phase2_audit_hardening (head)` | `alembic current` | 必须 |
 | Secret | Git 历史中不存在 | `git grep -n "Bearer "` 并人工核对 | 必须 |
 
 ## 11. 已知限制
@@ -240,4 +243,5 @@ await engine.dispose()
 2. `turnover_pct` 缺少流通股本时记录 `FLOAT_SHARES_UNAVAILABLE`，不以零替代。
 3. PyArrow 23.0.1 仍需要开发依赖 `pyarrow-stubs` 辅助严格类型检查。
 4. Starlette TestClient 当前会产生 AnyIO 旧别名弃用警告，不影响业务结果。
-5. `backtest-contract-v1` 必须在 Contract PR 经非作者 Review、合并后发布；未发布前 Contributor 不应从临时提交开工。
+5. `TargetProvider` 只接收不含 D+1 行情的 `DecisionReplayDay`；完整 `ReplayDay.execution_market` 只能传给 `ExecutionPort`。
+6. `backtest-contract-v1` 必须在 Contract PR 经非作者 Review、合并后发布；未发布前 Contributor 不应从临时提交开工。

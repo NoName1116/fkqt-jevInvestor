@@ -10,6 +10,7 @@ from fkqt_jevinvestor.domain.market_features import (
     AdjustmentMode,
     DailyBar,
     MarketSnapshot,
+    MarketSourceAudit,
     SecurityTradeState,
 )
 from fkqt_jevinvestor.ingestion.fkqt_rest import FkqtRestError, FkqtRestProvider
@@ -19,12 +20,18 @@ DECISION_DATE = date(2026, 9, 18)
 DECISION_CUTOFF = datetime(2026, 9, 18, 15, 30, tzinfo=SHANGHAI)
 
 
-def _payload(*, bar_date: date = DECISION_DATE) -> dict[str, object]:
+def _payload(
+    *,
+    bar_date: date = DECISION_DATE,
+    decision_cutoff: datetime = DECISION_CUTOFF,
+) -> dict[str, object]:
     snapshot = MarketSnapshot(
         snapshot_id="snapshot-rest-v1",
         decision_date=DECISION_DATE,
-        decision_cutoff=DECISION_CUTOFF,
+        decision_cutoff=decision_cutoff,
         next_trade_date=date(2026, 9, 21),
+        calendar_complete_through=date(2026, 9, 21),
+        universe_snapshot_id="fkqt-pool-v1",
         universe_snapshot_hash="a" * 64,
         daily_bars={
             "600000.SH": (
@@ -60,6 +67,19 @@ def _payload(*, bar_date: date = DECISION_DATE) -> dict[str, object]:
             )
         },
         source_manifest_ids=("b" * 64,),
+        source_audits=(
+            MarketSourceAudit(
+                upstream_type="FKQT_REST",
+                upstream_version="v1",
+                request_scope={"symbols": ["600000.SH"]},
+                data_cutoff=decision_cutoff,
+                schema_version="market-snapshot-v1",
+                fetched_at=decision_cutoff,
+                record_count=1,
+                raw_snapshot_ref="/api/v1/market-snapshots/2026-09-18",
+                content_hash="c" * 64,
+            ),
+        ),
         content_hash="0" * 64,
     )
     payload = snapshot.model_dump(mode="json")
@@ -117,6 +137,43 @@ async def test_rest_provider_rejects_future_daily_bar() -> None:
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
     ) as client:
         with pytest.raises(FkqtRestError, match="POINT_IN_TIME_VIOLATION"):
+            await FkqtRestProvider(client).freeze_snapshot(
+                symbols=("600000.SH",),
+                decision_date=DECISION_DATE,
+                decision_cutoff=DECISION_CUTOFF,
+                lookback_trading_days=61,
+            )
+
+
+async def test_rest_provider_rejects_same_day_pre_close_cutoff() -> None:
+    cutoff = datetime(2026, 9, 18, 9, tzinfo=SHANGHAI)
+    payload = _payload(decision_cutoff=cutoff)
+
+    async with httpx.AsyncClient(
+        base_url="https://fkqt.invalid",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
+    ) as client:
+        with pytest.raises(FkqtRestError, match="POINT_IN_TIME_VIOLATION"):
+            await FkqtRestProvider(client).freeze_snapshot(
+                symbols=("600000.SH",),
+                decision_date=DECISION_DATE,
+                decision_cutoff=cutoff,
+                lookback_trading_days=61,
+            )
+
+
+async def test_rest_provider_rejects_unproven_next_trade_date() -> None:
+    payload = _payload()
+    payload["calendar_complete_through"] = "2026-09-18"
+    payload["content_hash"] = ""
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload["content_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    async with httpx.AsyncClient(
+        base_url="https://fkqt.invalid",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
+    ) as client:
+        with pytest.raises(FkqtRestError, match="UPSTREAM_CALENDAR_INCOMPLETE"):
             await FkqtRestProvider(client).freeze_snapshot(
                 symbols=("600000.SH",),
                 decision_date=DECISION_DATE,

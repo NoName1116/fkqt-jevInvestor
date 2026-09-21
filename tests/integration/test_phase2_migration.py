@@ -31,6 +31,10 @@ def _unique_columns(connection: sqlite3.Connection, table: str) -> set[tuple[str
     }
 
 
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
+
+
 def test_phase2_market_tables_are_constrained_and_reversible(tmp_path: Path) -> None:
     database = tmp_path / "phase2.db"
     config = _config(database)
@@ -47,6 +51,12 @@ def test_phase2_market_tables_are_constrained_and_reversible(tmp_path: Path) -> 
             "feature_code",
             "feature_version",
         ) in _unique_columns(connection, "ai_signal_market_feature")
+        assert {
+            "calendar_complete_through",
+            "universe_snapshot_id",
+            "source_audits",
+        } <= _columns(connection, "ai_signal_market_snapshot")
+        assert "feature_snapshot_hash" in _columns(connection, "ai_signal_market_feature")
 
     command.downgrade(config, "0003_phase1_audit_snapshot")
     with sqlite3.connect(database) as connection:

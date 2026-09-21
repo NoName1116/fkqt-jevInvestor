@@ -1,6 +1,6 @@
 from collections.abc import Mapping
-from datetime import datetime, time, timedelta, timezone
-from decimal import Decimal
+from datetime import date
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from itertools import pairwise
 from statistics import mean
 from typing import Self
@@ -12,17 +12,39 @@ from fkqt_jevinvestor.domain.market_features import (
     FeatureValue,
     MarketFeatureSnapshot,
 )
+from fkqt_jevinvestor.domain.market_time import as_utc, market_close
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
 
 FEATURE_VERSION = "market-features-v1"
 _QUANTUM = Decimal("0.00000001")
-_ANNUALIZATION_FACTOR = Decimal(252).sqrt()
-_CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
+_DECIMAL_CONTEXT = Context(prec=50, rounding=ROUND_HALF_EVEN)
 _CROSS_SECTIONAL_FEATURES = (
     ("return_20d", "return_20d_percentile"),
     ("realized_vol_20d", "volatility_percentile"),
     ("amount_ratio_5d_20d", "liquidity_percentile"),
 )
+_SINGLE_SYMBOL_FEATURE_WINDOWS = {
+    "return_1d": 1,
+    "return_5d": 5,
+    "return_20d": 20,
+    "return_60d": 60,
+    "close_vs_ma5": 5,
+    "close_vs_ma20": 20,
+    "close_vs_ma60": 60,
+    "ma5_slope_5d": 10,
+    "ma20_slope_5d": 25,
+    "realized_vol_20d": 20,
+    "downside_vol_20d": 20,
+    "atr_pct_14d": 14,
+    "distance_from_20d_high": 20,
+    "distance_from_20d_low": 20,
+    "short_term_reversal_3d": 3,
+    "overnight_gap_pct": 1,
+    "gap_fill_pct": 1,
+    "volume_ratio_5d_20d": 20,
+    "amount_ratio_5d_20d": 20,
+    "turnover_pct": 1,
+}
 
 
 class CrossSectionEmptyError(ValueError):
@@ -51,6 +73,14 @@ def calculate_feature_coverage(
     feature_code: str,
     values: Mapping[str, Decimal | None],
 ) -> FeatureCoverage:
+    with localcontext(_DECIMAL_CONTEXT):
+        return _calculate_feature_coverage(feature_code, values)
+
+
+def _calculate_feature_coverage(
+    feature_code: str,
+    values: Mapping[str, Decimal | None],
+) -> FeatureCoverage:
     candidate_count = len(values)
     valid_count = sum(value is not None for value in values.values())
     coverage_ratio = (
@@ -66,6 +96,11 @@ def calculate_feature_coverage(
 
 
 def percentile_ranks(values: Mapping[str, Decimal]) -> dict[str, Decimal]:
+    with localcontext(_DECIMAL_CONTEXT):
+        return _percentile_ranks(values)
+
+
+def _percentile_ranks(values: Mapping[str, Decimal]) -> dict[str, Decimal]:
     if not values:
         raise CrossSectionEmptyError("CROSS_SECTION_EMPTY")
     if len(values) == 1:
@@ -156,6 +191,20 @@ def build_market_feature_snapshot(
     *,
     float_shares: Decimal | None = None,
 ) -> MarketFeatureSnapshot:
+    with localcontext(_DECIMAL_CONTEXT):
+        return _build_market_feature_snapshot(
+            bars,
+            source_snapshot_hash,
+            float_shares=float_shares,
+        )
+
+
+def _build_market_feature_snapshot(
+    bars: tuple[DailyBar, ...],
+    source_snapshot_hash: str,
+    *,
+    float_shares: Decimal | None = None,
+) -> MarketFeatureSnapshot:
     if not bars:
         raise ValueError("bars must not be empty")
     if len(source_snapshot_hash) != 64:
@@ -168,7 +217,7 @@ def build_market_feature_snapshot(
         raise ValueError("float_shares must be positive")
 
     latest = bars[-1]
-    as_of = datetime.combine(latest.trade_date, time(15), tzinfo=_CHINA_STANDARD_TIME)
+    as_of = as_utc(market_close(latest.trade_date))
     values: dict[str, FeatureValue] = {}
 
     def add_value(code: str, lookback: int, value: Decimal) -> None:
@@ -200,38 +249,33 @@ def build_market_feature_snapshot(
         return False
 
     price_feature_windows = {
-        "return_1d": 1,
-        "return_5d": 5,
-        "return_20d": 20,
-        "close_vs_ma20": 20,
-        "ma20_slope_5d": 25,
-        "realized_vol_20d": 20,
-        "downside_vol_20d": 20,
-        "atr_pct_14d": 14,
-        "distance_from_20d_high": 20,
-        "distance_from_20d_low": 20,
-        "short_term_reversal_3d": 3,
-        "overnight_gap_pct": 1,
-        "gap_fill_pct": 1,
+        code: lookback
+        for code, lookback in _SINGLE_SYMBOL_FEATURE_WINDOWS.items()
+        if code not in {"volume_ratio_5d_20d", "amount_ratio_5d_20d", "turnover_pct"}
     }
     adjustment_modes = {bar.adjustment_mode for bar in bars}
     if len(adjustment_modes) != 1:
         for code, lookback in price_feature_windows.items():
             add_missing(code, lookback, "ADJUSTMENT_MODE_MISMATCH")
     else:
-        for days in (1, 5, 20):
+        for days in (1, 5, 20, 60):
             code = f"return_{days}d"
             if require_history(code, days, days + 1):
                 add_value(code, days, latest.close / bars[-days - 1].close - Decimal(1))
 
-        if require_history("close_vs_ma20", 20, 20):
-            ma20 = mean(bar.close for bar in bars[-20:])
-            add_value("close_vs_ma20", 20, latest.close / ma20 - Decimal(1))
+        for days in (5, 20, 60):
+            code = f"close_vs_ma{days}"
+            if require_history(code, days, days):
+                moving_average = mean(bar.close for bar in bars[-days:])
+                add_value(code, days, latest.close / moving_average - Decimal(1))
 
-        if require_history("ma20_slope_5d", 25, 25):
-            current_ma20 = mean(bar.close for bar in bars[-20:])
-            previous_ma20 = mean(bar.close for bar in bars[-25:-5])
-            add_value("ma20_slope_5d", 25, current_ma20 / previous_ma20 - Decimal(1))
+        for days in (5, 20):
+            code = f"ma{days}_slope_5d"
+            required = days + 5
+            if require_history(code, required, required):
+                current_average = mean(bar.close for bar in bars[-days:])
+                previous_average = mean(bar.close for bar in bars[-required:-5])
+                add_value(code, required, current_average / previous_average - Decimal(1))
 
         if len(bars) >= 21:
             daily_returns = [
@@ -241,13 +285,13 @@ def build_market_feature_snapshot(
             add_value(
                 "realized_vol_20d",
                 20,
-                _sample_standard_deviation(daily_returns) * _ANNUALIZATION_FACTOR,
+                _sample_standard_deviation(daily_returns) * Decimal(252).sqrt(),
             )
             downside_returns = [min(value, Decimal(0)) for value in daily_returns]
             add_value(
                 "downside_vol_20d",
                 20,
-                _sample_standard_deviation(downside_returns) * _ANNUALIZATION_FACTOR,
+                _sample_standard_deviation(downside_returns) * Decimal(252).sqrt(),
             )
         else:
             add_missing("realized_vol_20d", 20, "INSUFFICIENT_HISTORY")
@@ -326,3 +370,32 @@ def build_market_feature_snapshot(
         content_hash="0" * 64,
     )
     return _with_content_hash(unhashed)
+
+
+def build_missing_market_feature_snapshot(
+    symbol: str,
+    decision_date: date,
+    source_snapshot_hash: str,
+    missing_reason: str,
+) -> MarketFeatureSnapshot:
+    as_of = as_utc(market_close(decision_date))
+    values = {
+        code: FeatureValue(
+            feature_code=code,
+            feature_version=FEATURE_VERSION,
+            as_of=as_of,
+            lookback_window=lookback,
+            value=None,
+            missing_reason=missing_reason,
+            source_snapshot_hash=source_snapshot_hash,
+        )
+        for code, lookback in _SINGLE_SYMBOL_FEATURE_WINDOWS.items()
+    }
+    return _with_content_hash(
+        MarketFeatureSnapshot(
+            symbol=symbol,
+            decision_date=decision_date,
+            values=values,
+            content_hash="0" * 64,
+        )
+    )

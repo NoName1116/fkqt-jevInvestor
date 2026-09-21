@@ -4,6 +4,7 @@ import httpx
 from pydantic import ValidationError
 
 from fkqt_jevinvestor.domain.market_features import MarketSnapshot
+from fkqt_jevinvestor.domain.market_time import as_utc, validate_decision_cutoff
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
 
 
@@ -84,14 +85,30 @@ class FkqtRestProvider:
         decision_date: date,
         decision_cutoff: datetime,
     ) -> None:
+        try:
+            validate_decision_cutoff(decision_date, decision_cutoff)
+        except ValueError as exc:
+            raise FkqtRestError("POINT_IN_TIME_VIOLATION") from exc
         if (
             snapshot.decision_date != decision_date
             or snapshot.decision_cutoff != decision_cutoff
-            or decision_cutoff.date() != decision_date
         ):
             raise FkqtRestError("POINT_IN_TIME_VIOLATION")
+        if not snapshot.source_audits or any(
+            as_utc(audit.data_cutoff) > as_utc(decision_cutoff)
+            for audit in snapshot.source_audits
+        ):
+            raise FkqtRestError("POINT_IN_TIME_VIOLATION")
+        expected_scope = list(expected_symbols)
+        if not any(
+            audit.request_scope.get("symbols") == expected_scope
+            for audit in snapshot.source_audits
+        ):
+            raise FkqtRestError("UPSTREAM_UNIVERSE_AUDIT_MISSING")
         if snapshot.next_trade_date <= decision_date:
             raise FkqtRestError("NEXT_TRADE_DATE_UNAVAILABLE")
+        if snapshot.calendar_complete_through < snapshot.next_trade_date:
+            raise FkqtRestError("UPSTREAM_CALENDAR_INCOMPLETE")
 
         expected = set(expected_symbols)
         if set(snapshot.daily_bars) != expected or set(snapshot.security_states) != expected:

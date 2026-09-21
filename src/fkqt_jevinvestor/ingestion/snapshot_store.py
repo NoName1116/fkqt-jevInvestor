@@ -3,6 +3,7 @@ from datetime import date
 from pathlib import Path
 
 from fkqt_jevinvestor.domain.market_features import MarketSnapshot
+from fkqt_jevinvestor.domain.market_time import as_utc, validate_decision_cutoff
 from fkqt_jevinvestor.ingestion.canonical import canonical_json, sha256_json
 
 
@@ -42,8 +43,19 @@ class MarketSnapshotStore:
         return snapshot
 
     def _validate(self, snapshot: MarketSnapshot) -> None:
-        if snapshot.decision_cutoff.date() != snapshot.decision_date:
-            raise SnapshotValidationError("POINT_IN_TIME_VIOLATION: cutoff date mismatch")
+        try:
+            validate_decision_cutoff(snapshot.decision_date, snapshot.decision_cutoff)
+        except ValueError as exc:
+            raise SnapshotValidationError(str(exc)) from exc
+        if not snapshot.source_audits:
+            raise SnapshotValidationError("SOURCE_AUDIT_REQUIRED")
+        for audit in snapshot.source_audits:
+            try:
+                if as_utc(audit.data_cutoff) > as_utc(snapshot.decision_cutoff):
+                    raise SnapshotValidationError("POINT_IN_TIME_VIOLATION")
+                as_utc(audit.fetched_at)
+            except ValueError as exc:
+                raise SnapshotValidationError(str(exc)) from exc
 
         if any(
             bar.trade_date > snapshot.decision_date
@@ -60,6 +72,8 @@ class MarketSnapshotStore:
 
         if snapshot.next_trade_date <= snapshot.decision_date:
             raise SnapshotValidationError("INVALID_NEXT_TRADE_DATE")
+        if snapshot.calendar_complete_through < snapshot.next_trade_date:
+            raise SnapshotValidationError("TRADING_CALENDAR_INCOMPLETE")
 
         payload = snapshot.model_dump(mode="json")
         payload["content_hash"] = ""

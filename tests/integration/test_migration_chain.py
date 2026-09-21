@@ -20,7 +20,7 @@ def test_migrated_revision_chain_is_repeatable_and_reversible(tmp_path: Path) ->
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert revision == ("0004_phase2_market_features",)
+    assert revision == ("0005_phase2_audit_hardening",)
     assert len({name for name in tables if name.startswith("ai_signal_")}) == 13
 
     command.downgrade(config, "base")

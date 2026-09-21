@@ -3,10 +3,10 @@ import asyncio
 import json
 import sys
 from collections.abc import Sequence
-from datetime import date, datetime, time
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
 from fkqt_jevinvestor.config import Settings
+from fkqt_jevinvestor.domain.market_time import market_close
 from fkqt_jevinvestor.ingestion.fkqt_manifest import FkqtManifestProvider
 from fkqt_jevinvestor.ingestion.snapshot_store import MarketSnapshotStore
 from fkqt_jevinvestor.persistence.market_repository import MarketSnapshotRepository
@@ -14,16 +14,16 @@ from fkqt_jevinvestor.persistence.session import create_engine, create_session_f
 from fkqt_jevinvestor.services.market_pipeline import MarketPipeline
 
 
+def decision_cutoff_for_date(decision_date: date) -> datetime:
+    return market_close(decision_date)
+
+
 async def _freeze_manifest(args: argparse.Namespace, settings: Settings) -> int:
     if settings.fkqt_manifest_bundle_root is None:
         print("FKQT_MANIFEST_BUNDLE_ROOT_REQUIRED", file=sys.stderr)
         return 2
     symbols = tuple(symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip())
-    decision_cutoff = datetime.combine(
-        args.decision_date,
-        time(15),
-        tzinfo=ZoneInfo("Asia/Shanghai"),
-    )
+    decision_cutoff = decision_cutoff_for_date(args.decision_date)
     engine = create_engine(settings.database_url)
     try:
         pipeline = MarketPipeline(

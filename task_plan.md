@@ -56,7 +56,7 @@
 
 ## 当前停止点
 
-Phase 2 核心实现已完成。完整验收首次运行得到 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 100 passed/2 failed/1 deselected；两个失败均为旧迁移测试仍把 `head` 写死为 Phase 1，修正后只重跑失败项得到 2 passed。Alembic 当前为 `0004_phase2_market_features (head)`。下一步是 Contract PR 获得非作者 Review 并合并，随后发布不可移动的 `backtest-contract-v1` 标签，沙耶再从该标签开始回测实现。
+Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收得到 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 100 passed/2 failed/1 deselected；两个旧迁移测试修正后单独得到 2 passed。审查修复覆盖防前视、UTC 往返、特征哈希、缺行情覆盖、Windows 时区、遗漏特征、冻结候选池、来源审计、日历完整性、回测决策视图和 Decimal context；直接相关测试 35 项通过。数据库目标 Revision 更新为 `0005_phase2_audit_hardening (head)`。下一步是推送修复、更新 Contract PR，获得非作者 Review 并合并，随后发布不可移动的 `backtest-contract-v1` 标签。
 # Phase 1 Task 8 最终状态（2026-09-21）
 
 - 状态：完成。

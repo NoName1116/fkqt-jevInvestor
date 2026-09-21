@@ -46,7 +46,7 @@ class TargetPositionBatch(BaseModel):
     input_hash: str = Field(min_length=64, max_length=64)
 
 
-class ReplayDay(BaseModel):
+class DecisionReplayDay(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     decision_date: date
@@ -56,7 +56,15 @@ class ReplayDay(BaseModel):
     market_snapshot_hash: str = Field(min_length=64, max_length=64)
     feature_snapshot_hash: str = Field(min_length=64, max_length=64)
     features: Mapping[str, MarketFeatureSnapshot]
+
+
+class ReplayDay(DecisionReplayDay):
     execution_market: Mapping[str, MarketExecutionSnapshot]
+
+    def decision_view(self) -> DecisionReplayDay:
+        return DecisionReplayDay.model_validate(
+            self.model_dump(exclude={"execution_market"})
+        )
 
 
 class BacktestConfig(BaseModel):
@@ -148,7 +156,7 @@ class TargetProvider(Protocol):
     async def build_targets(
         self,
         config: BacktestConfig,
-        day: ReplayDay,
+        day: DecisionReplayDay,
         portfolio: PortfolioState,
     ) -> TargetPositionBatch: ...
 

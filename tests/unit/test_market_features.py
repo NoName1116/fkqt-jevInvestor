@@ -1,5 +1,5 @@
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, localcontext
 
 from fkqt_jevinvestor.domain.market_features import AdjustmentMode, DailyBar
 from fkqt_jevinvestor.services.market_features import build_market_feature_snapshot
@@ -46,3 +46,23 @@ def test_mixed_adjustment_mode_marks_price_features_missing() -> None:
     assert snapshot.values["return_1d"].value is None
     assert snapshot.values["return_1d"].missing_reason == "ADJUSTMENT_MODE_MISMATCH"
     assert snapshot.values["volume_ratio_5d_20d"].value is not None
+
+
+def test_complete_v1_feature_set_includes_long_and_short_trends() -> None:
+    snapshot = build_market_feature_snapshot(_bars(), "a" * 64)
+
+    assert snapshot.values["return_60d"].value == Decimal("0.60000000")
+    assert snapshot.values["close_vs_ma5"].value == Decimal("0.01265823")
+    assert snapshot.values["close_vs_ma60"].value == Decimal("0.22605364")
+    assert snapshot.values["ma5_slope_5d"].value == Decimal("0.03267974")
+
+
+def test_external_decimal_rounding_does_not_change_values_or_hash() -> None:
+    with localcontext() as context:
+        context.rounding = ROUND_DOWN
+        first = build_market_feature_snapshot(_bars(), "a" * 64)
+    with localcontext() as context:
+        context.rounding = ROUND_UP
+        second = build_market_feature_snapshot(_bars(), "a" * 64)
+
+    assert first == second
