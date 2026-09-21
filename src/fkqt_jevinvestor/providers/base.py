@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from fkqt_jevinvestor.domain.enums import ProviderStatus
 from fkqt_jevinvestor.domain.evidence import MinimalEvidenceSnapshot
 from fkqt_jevinvestor.domain.factors import SemanticFactorBatch
+from fkqt_jevinvestor.domain.jev_market import JevEvaluationCommand, JevEvaluationV1
 
 
 class ProviderUnavailableError(RuntimeError):
@@ -14,7 +15,9 @@ class ProviderUnavailableError(RuntimeError):
 
 
 class ProviderContractError(RuntimeError):
-    pass
+    def __init__(self, message: str, response_hash: str | None = None) -> None:
+        super().__init__(message)
+        self.response_hash = response_hash
 
 
 class ProviderHealth(BaseModel):
@@ -59,6 +62,14 @@ class SemanticSourceProvider(Protocol):
 
 class SemanticFactorProvider(Protocol):
     async def evaluate(self, request: SemanticFactorRequest) -> SemanticFactorBatch:
+        ...
+
+    async def health(self) -> ProviderHealth:
+        ...
+
+
+class JevMarketProvider(Protocol):
+    async def evaluate(self, command: JevEvaluationCommand) -> JevEvaluationV1:
         ...
 
     async def health(self) -> ProviderHealth:

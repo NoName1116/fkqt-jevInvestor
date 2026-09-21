@@ -144,3 +144,34 @@
 15. 独立整分支审查发现 1 个 Critical、10 个 Important 和 2 个 Minor。Critical/Important 已进入一次集中修复：日频 cutoff 必须达到中国市场 15:00 且带时区；数据库统一写入 UTC；原特征快照哈希持久化；缺行情和陈旧行情输出稳定缺失；补齐 4 个设计特征；固定 Decimal precision/rounding；Manifest 强制冻结候选池和来源审计；交易日历必须逐日完整；TargetProvider 无法访问 D+1 行情。
 16. 审查修复直接相关测试分三组运行：单元 15 passed、Adapter Contract 10 passed、Phase 2 集成 10 passed；Ruff 全量通过，Pyright 0 errors/0 warnings。
 17. 两个 Minor 延后：Pydantic frozen 模型内部 Mapping 仍可变；快照文件尚未采用临时文件加原子发布。两项不会绕过当前哈希校验，但应在下一次存储加固任务处理。
+
+## Phase 3 Jev 行情盈亏概率（2026-09-21）
+
+1. Phase 3 使用 `JevUniverseStateV1` 与 `JevSymbolStateV1` 两层状态；候选池状态不包含单票历史或账户数据，个股状态不包含 `HELD_ONLY` 标记。
+2. 候选容量由每次运行的 `candidate_limit` 显式给出；队列外持仓参与个股评估但不计容量，也不进入候选池横截面聚合。
+3. Jev 只回答候选池风险与个股 1 日盈亏、5 日盈亏、5 日回撤、5 日盈亏不对称和数据充分度的 Choice 概率，不再实现因子权重。
+4. 未来真实标签由 Decimal 代码从 D+1 开盘和 D+1 至 D+5 冻结行情计算；D+1 成交量或成交额为 0 被视为不可成交，返回 `LABEL_UNAVAILABLE`。
+5. TypeSafe 新 Provider 与旧新闻语义 Provider 隔离；契约错误只保存清理后响应哈希，外部异常只公开异常类型。
+6. `formal_key` 跨运行复用正式结果，`run_id` 通过独立 RunLink 审计；成功缓存命中不新增 Attempt，失败重试序号递增。
+7. Phase 3 新增数据库 Revision `0006_phase3_jev_pnl_probabilities` 和四张表：Evaluation、Attempt、QuestionResult、RunLink。
+8. C 组编排按候选池一次、证券排序逐一评估；必要特征缺失、Provider 不可用和响应契约无效都保存无概率失败结果，不退化到其他实验组。
+9. 新 Live Contract Probe 使用合成状态，并由 `RUN_LIVE_JEV_TESTS=1` 与 `TYPESAFE_API_KEY` 双门控；默认离线执行不访问外部服务。
+10. Phase 3 首次完整离线验收为 `192 passed, 1 failed, 2 deselected`；唯一失败是旧迁移链测试仍把 Alembic head 和业务表数量固定为 Phase 2 的 `0005/13`。
+11. 旧迁移断言更新为 Phase 3 的 `0006/17` 后，只重跑该失败项得到 `1 passed`；有效离线结果为 193 项通过、0 项有效失败、2 个 live 测试未执行。
+12. Ruff 首次发现 21 个 Phase 3 风格问题，19 个由安全机械修复完成，2 个手工修正为 `pairwise` 和明确 `IntegrityError`；重跑结果为 `All checks passed!`。
+13. Pyright 在隔离 worktree 中必须显式使用父工作区解释器；最终结果为 `0 errors, 0 warnings, 0 informations`。
+14. Alembic 独立临时 SQLite 完成 `upgrade head → downgrade 0005 → upgrade head`，最终为 `0006_phase3_jev_pnl_probabilities (head)`。
+15. Secret 扫描未发现实际凭据；命中项仅为空 `.env.example`、扫描正则文本和运行手册中的密码管理器占位符。
+16. 旧语义 Provider、新行情 Provider和回测契约兼容测试为 `20 passed`；静态修正涉及的标签、Repository 和编排定点回归为 `37 passed`。
+17. 独立 Phase 3 审查发现费用版本、问题集完整性、State 白名单、Jev 边界 Point-in-Time、真实标签交易日/可成交性、空候选池、Claim lease 和失败延迟审计问题；全部映射到 R15/R16/R22/R39/R40/R42 并进入阻断修复。
+18. `pnl-label-criteria-v1` 现在固定 `round-trip-cost-v1 = 0.00100000`，标签实体保存成本、成本版本、行情哈希和交易日历哈希；D+1 至 D+5 必须匹配冻结交易日历，D+1 必须通过停牌与一字涨跌停可成交校验。
+19. `AVAILABLE` 结果按 scope 强制完整问题集和冻结问题契约；Jev State 使用字段白名单，Provider 在外部调用前重新验证 State。
+20. Jev Builder 在独立入口再次校验决策截止、来源审计、日线日期和证券状态日期；空候选池或必要聚合缺失记录 `DATA_UNAVAILABLE`，不调用 Provider。
+21. Attempt 增加 lease 与 owner token；过期后新 owner 使用递增序号接管，旧 owner 无法提交。Provider 失败保存真实开始、结束和延迟，不再固定为 0。
+22. 独立审查修复后的 Phase 3 定向回归为 `98 passed`；回测契约另行定点回归为 `2 passed`。
+23. 审查修复后 Ruff 为 `All checks passed!`，Pyright 为 `0 errors, 0 warnings, 0 informations`，Alembic 临时库再次完成 `0006 → 0005 → 0006` 并停在 `0006_phase3_jev_pnl_probabilities (head)`。
+24. TypeSafe SDK 依赖从宽泛的 `<1` 收紧为已验证的 `typesafe-sdk==0.7.0`，并新增真实 `SystemOneResponse`/`ChoiceAnswer` 离线契约测试。
+25. 第二轮独立审查指出 State 只限制“不得多字段”但未限制“不得少字段”；现已要求 Universe metrics/coverage 与 Symbol security 字段全集完整，并要求缺失特征与 `missing_reasons` 一一对应，特征计数与实际字段数一致。
+26. Evaluation 主记录现保存当前 owner token 和租约截止时间；过期接管、成功提交和失败提交都使用数据库条件 `UPDATE` 作为 CAS 裁决。两个 worker 并发抢占时只有一个获得新 Attempt，租约已过期的旧 owner 无法同时写入终态。
+27. 第二轮修复定点验证：State/Provider/Repository 受影响测试 44 项通过；Repository、C 组 Service 与 Phase 3 迁移回归 19 项通过；新增过期租约并发测试 3 项通过。Ruff 全通过，Pyright 0 errors/0 warnings。
+28. 最终复核补充发现 Universe coverage 可能字段齐全但数值矛盾；现已要求计数非负、计数和等于候选实际数量、覆盖率处于 0—1 且与计数一致、缺失数量与缺失原因相互一致，空候选池只能使用 `coverage_ratio=None`。相关 State/Builder/Provider/Service 定点回归 57 项通过。

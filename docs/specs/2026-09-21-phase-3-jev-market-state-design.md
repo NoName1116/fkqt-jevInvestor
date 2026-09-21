@@ -159,7 +159,7 @@ decision_date + decision_cutoff + candidate_universe_hash
 
 ### 5.3 真实标签口径
 
-真实标签由代码在评估阶段生成，Jev 不参与计算。设 `entry_open` 为 D+1 可成交开盘价，`round_trip_cost_v1` 为实验冻结的双边费用与滑点比例：
+真实标签由代码在评估阶段生成，Jev 不参与计算。`pnl-label-criteria-v1` 唯一绑定 `round-trip-cost-v1 = 0.00100000`，该比例包含实验冻结的双边费用与滑点；调用者不得在保持版本不变时覆盖成本。设 `entry_open` 为冻结交易日历确认的 D+1 可成交开盘价：
 
 ```text
 net_return_h = close(D+h) / entry_open - 1 - round_trip_cost_v1
@@ -176,7 +176,7 @@ mfe_5d = max(0, max(high(D+1 ... D+5) / entry_open - 1))
 | `drawdown_risk_5d` | `LOW`：`abs(mae_5d) <= 0.02`；`MEDIUM`：`0.02 < abs(mae_5d) <= 0.05`；`HIGH`：`abs(mae_5d) > 0.05` |
 | `payoff_asymmetry_5d` | `UPSIDE_DOMINANT`：`mfe_5d >= 1.5 × abs(mae_5d)`；`DOWNSIDE_DOMINANT`：`abs(mae_5d) >= 1.5 × mfe_5d`；其余为 `BALANCED`；二者同为 0 时为 `BALANCED` |
 
-停牌、无 D+1 可成交开盘、未来 5 个有效交易日不完整或复权口径不一致时，真实标签状态为 `LABEL_UNAVAILABLE`，不得用零收益替代。上述定义统一使用 `pnl-label-criteria-v1`；任何阈值或费用口径变化都必须提升版本。
+标签生成必须同时保存 `round_trip_cost`、`cost_model_version`、行情快照哈希和交易日历快照哈希。D+1 至 D+5 日期必须逐项等于冻结交易日历给出的五个有效交易日；D+1 证券状态必须可交易，停牌、成交量或成交额为零、一字涨跌停锁死、未来 5 个有效交易日不完整或复权口径不一致时，真实标签状态为 `LABEL_UNAVAILABLE`，不得用零收益替代。上述定义统一使用 `pnl-label-criteria-v1`；任何阈值、费用或公式变化都必须提升版本。
 
 ### 5.4 标准输出 `JevQuestionResultV1`
 
@@ -255,7 +255,7 @@ class JevSymbolStateProvider(Protocol):
 | 未知标签、缺标签、非法概率、Schema 不匹配 | `CONTRACT_INVALID` | 不存在 | 保存响应哈希和错误码，不保存正式概率 |
 | 完整有效响应 | `AVAILABLE` | 完整分布 | 允许进入下游实验 |
 
-正式调用以输入哈希和版本组合幂等。已存在 `AVAILABLE` 结果时直接复用，不再次调用 Provider。失败重试创建新的 Attempt 记录，但只有一次结果能成为该正式键的当前正式结果。
+正式调用以输入哈希和版本组合幂等。已存在 `AVAILABLE` 结果时直接复用，不再次调用 Provider。失败重试创建新的 Attempt 记录，但只有一次结果能成为该正式键的当前正式结果。`IN_PROGRESS` Attempt 使用带时区的 lease 和不可猜测 owner token；lease 过期后新调用者原子创建下一序号 Attempt，旧 owner 的迟到写入必须拒绝。
 
 ## 8. 持久化与审计
 
