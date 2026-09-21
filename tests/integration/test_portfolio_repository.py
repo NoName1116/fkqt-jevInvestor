@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,8 +18,14 @@ from fkqt_jevinvestor.domain.market import (
 )
 from fkqt_jevinvestor.domain.signals import FixtureSignal, FixtureSignalBatch, SignalAction
 from fkqt_jevinvestor.persistence.models import (
+    DecisionEvaluationRecord,
+    JevEvaluationRecord,
     NavRecord,
     PortfolioSnapshotRecord,
+    PositionSizingRunRecord,
+    PositionTargetRecord,
+    SignalBatchRecord,
+    SignalRecord,
     VirtualFillRecord,
     VirtualOrderRecord,
 )
@@ -32,6 +38,12 @@ from fkqt_jevinvestor.persistence.repositories import (
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.services.portfolio_service import CreatePortfolio, ExecuteTradeDate
 from fkqt_jevinvestor.services.signal_validator import validate_signal_batch
+from fkqt_jevinvestor.services.position_sizing import (
+    PositionSizingConfigV1,
+    to_validated_signal_batch,
+)
+from tests.unit.test_position_sizing import _evaluation, _features, _run
+from fkqt_jevinvestor.domain.decision import DecisionAction
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -94,6 +106,70 @@ async def accepted_batch(repository: PortfolioRepository) -> object:
 async def scalar_count(session_factory: SessionFactory, model: type[object]) -> int:
     async with session_factory() as session:
         return int((await session.scalar(select(func.count()).select_from(model))) or 0)
+
+
+async def seed_c_group_evaluation(session_factory: SessionFactory) -> None:
+    now = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    async with session_factory.begin() as session:
+        for evaluation_id, scope, symbol in (
+            ("jev-universe", "UNIVERSE", None),
+            ("jev-symbol", "SYMBOL", "000001.SZ"),
+        ):
+            session.add(
+                JevEvaluationRecord(
+                    id=evaluation_id,
+                    formal_key=("1" if scope == "UNIVERSE" else "2") * 64,
+                    scope=scope,
+                    symbol=symbol,
+                    decision_date=now.date(),
+                    decision_cutoff=now,
+                    state_json={},
+                    input_hash="3" * 64,
+                    provider_name="typesafe",
+                    provider_version="0.7.0",
+                    model_id="jev-market",
+                    state_schema_version="jev-state-v1",
+                    question_set_version="jev-pnl-questions-v1",
+                    status="AVAILABLE",
+                    latest_attempt_sequence=1,
+                    current_owner_token=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        session.add(
+            DecisionEvaluationRecord(
+                id="decision-000001.SZ",
+                formal_key="4" * 64,
+                portfolio_id="portfolio-1",
+                symbol="000001.SZ",
+                membership="CANDIDATE",
+                decision_date=now.date(),
+                decision_cutoff=now,
+                input_json={},
+                input_hash="5" * 64,
+                universe_jev_evaluation_id="jev-universe",
+                symbol_jev_evaluation_id="jev-symbol",
+                provider_name="deepseek",
+                provider_version="responses-v1",
+                model_id="deepseek-flash",
+                prompt_version="decision-prompt-v1",
+                output_schema_version="decision-output-v1",
+                status="AVAILABLE",
+                action="ENTER",
+                thesis="冻结证据一致。",
+                invalidation="趋势结构失效。",
+                raw_response_text='{"action":"ENTER"}',
+                raw_response_hash="6" * 64,
+                error_code=None,
+                latest_attempt_sequence=1,
+                current_owner_token=None,
+                lease_expires_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -250,6 +326,70 @@ async def test_repeated_execution_does_not_create_another_fill(
 
     assert repeated.fills == ()
     assert await scalar_count(session_factory, VirtualFillRecord) == 1
+
+
+@pytest.mark.asyncio
+async def test_c_group_sizing_signal_and_order_are_saved_atomically(
+    session_factory: SessionFactory,
+) -> None:
+    repository = PortfolioRepository(session_factory)
+    await repository.create(CreatePortfolio(portfolio_id="portfolio-1", name="Demo"))
+    await seed_c_group_evaluation(session_factory)
+    state = await repository.get_state("portfolio-1", date(2026, 9, 18))
+    evaluation = _evaluation("000001.SZ", DecisionAction.ENTER)
+    sizing_run = _run(
+        (evaluation,),
+        {"000001.SZ": _features("000001.SZ")},
+        state,
+    )
+    validated = to_validated_signal_batch(sizing_run)
+
+    stored = await repository.save_c_group_signal_batch(
+        sizing_run,
+        PositionSizingConfigV1(),
+        validated,
+        state,
+    )
+
+    assert stored.orders and stored.orders[0].symbol == "000001.SZ"
+    assert await scalar_count(session_factory, PositionSizingRunRecord) == 1
+    assert await scalar_count(session_factory, PositionTargetRecord) == 1
+    assert await scalar_count(session_factory, SignalBatchRecord) == 1
+    assert await scalar_count(session_factory, SignalRecord) == 1
+    assert await scalar_count(session_factory, VirtualOrderRecord) == 1
+
+
+@pytest.mark.asyncio
+async def test_c_group_target_failure_rolls_back_sizing_signal_and_order(
+    session_factory: SessionFactory,
+) -> None:
+    repository = PortfolioRepository(session_factory)
+    await repository.create(CreatePortfolio(portfolio_id="portfolio-1", name="Demo"))
+    await seed_c_group_evaluation(session_factory)
+    state = await repository.get_state("portfolio-1", date(2026, 9, 18))
+    evaluation = _evaluation("000001.SZ", DecisionAction.ENTER)
+    sizing_run = _run(
+        (evaluation,),
+        {"000001.SZ": _features("000001.SZ")},
+        state,
+    )
+    invalid_run = sizing_run.model_copy(
+        update={"targets": (sizing_run.targets[0], sizing_run.targets[0])}
+    )
+
+    with pytest.raises(PortfolioTransactionError, match="C_GROUP_ATOMIC_WRITE_FAILED"):
+        await repository.save_c_group_signal_batch(
+            invalid_run,
+            PositionSizingConfigV1(),
+            to_validated_signal_batch(invalid_run),
+            state,
+        )
+
+    assert await scalar_count(session_factory, PositionSizingRunRecord) == 0
+    assert await scalar_count(session_factory, PositionTargetRecord) == 0
+    assert await scalar_count(session_factory, SignalBatchRecord) == 0
+    assert await scalar_count(session_factory, SignalRecord) == 0
+    assert await scalar_count(session_factory, VirtualOrderRecord) == 0
 
 
 @pytest.mark.asyncio

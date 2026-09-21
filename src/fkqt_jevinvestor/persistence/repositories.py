@@ -15,6 +15,8 @@ from fkqt_jevinvestor.persistence.models import (
     NavRecord,
     PortfolioRecord,
     PortfolioSnapshotRecord,
+    PositionSizingRunRecord,
+    PositionTargetRecord,
     PositionLotRecord,
     PositionRecord,
     SignalBatchRecord,
@@ -36,6 +38,10 @@ from fkqt_jevinvestor.services.portfolio_service import (
     PortfolioLedger,
     PortfolioSnapshot,
     PositionLot,
+)
+from fkqt_jevinvestor.services.position_sizing import (
+    PositionSizingConfigV1,
+    PositionSizingRunV1,
 )
 
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -263,6 +269,199 @@ class PortfolioRepository:
                 input_hash=batch.input_hash,
                 orders=stored_orders,
             )
+
+    async def save_c_group_signal_batch(
+        self,
+        sizing_run: PositionSizingRunV1,
+        sizing_config: PositionSizingConfigV1,
+        batch: ValidatedSignalBatch,
+        decision_portfolio: PortfolioState,
+    ) -> StoredSignalBatch:
+        if (
+            sizing_run.config_hash != sizing_config.config_hash
+            or sizing_run.portfolio_id != batch.batch.portfolio_id
+            or sizing_run.portfolio_id != decision_portfolio.portfolio_id
+            or sizing_run.portfolio_version != decision_portfolio.version
+            or sizing_run.decision_date != batch.batch.decision_date
+            or sizing_run.planned_execution_date
+            != batch.batch.planned_execution_date
+            or tuple(item.symbol for item in sizing_run.targets)
+            != batch.batch.candidate_symbols
+        ):
+            raise PortfolioTransactionError("C_GROUP_PERSISTENCE_IDENTITY_MISMATCH")
+        try:
+            async with self._session_factory.begin() as session:
+                existing_run = await session.scalar(
+                    select(PositionSizingRunRecord).where(
+                        PositionSizingRunRecord.run_id == sizing_run.run_id
+                    )
+                )
+                if existing_run is not None:
+                    if (
+                        existing_run.input_hash != sizing_run.input_hash
+                        or existing_run.target_batch_hash
+                        != sizing_run.target_batch_hash
+                        or existing_run.signal_batch_id is None
+                    ):
+                        raise PortfolioTransactionError(
+                            "C_GROUP_IDEMPOTENCY_CONFLICT"
+                        )
+                    signal_record = await session.get(
+                        SignalBatchRecord, existing_run.signal_batch_id
+                    )
+                    if signal_record is None:
+                        raise PortfolioTransactionError(
+                            "C_GROUP_SIGNAL_BATCH_NOT_FOUND"
+                        )
+                    return await self._stored_batch(session, signal_record)
+
+                portfolio_record = await session.get(
+                    PortfolioRecord, sizing_run.portfolio_id
+                )
+                if portfolio_record is None:
+                    raise PortfolioNotFound(sizing_run.portfolio_id)
+                if portfolio_record.version != sizing_run.portfolio_version:
+                    raise PortfolioVersionConflict("PORTFOLIO_VERSION_CONFLICT")
+
+                policy = ExecutionPolicy()
+                drafts = build_order_drafts(
+                    batch,
+                    decision_portfolio,
+                    policy,
+                    batch.batch.planned_execution_date,
+                )
+                now = datetime.now(UTC)
+                batch_id = _stable_id("batch", batch.input_hash)
+                decision_snapshot_id = _stable_id(
+                    "snapshot", f"decision:{batch.input_hash}"
+                )
+                decision_details = decision_portfolio.model_dump(mode="json")
+                decision_payload = json.dumps(
+                    decision_details,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                market_value = sum(
+                    (
+                        item.last_price * item.quantity
+                        for item in decision_portfolio.positions
+                    ),
+                    Decimal(0),
+                )
+                session.add(
+                    PortfolioSnapshotRecord(
+                        id=decision_snapshot_id,
+                        portfolio_id=sizing_run.portfolio_id,
+                        snapshot_type="DECISION_INPUT",
+                        as_of=datetime.combine(
+                            sizing_run.decision_date, time.min, tzinfo=UTC
+                        ),
+                        cash_balance=decision_portfolio.cash_balance,
+                        frozen_cash=decision_portfolio.frozen_cash,
+                        market_value=market_value,
+                        total_equity=decision_portfolio.cash_balance + market_value,
+                        realized_pnl=decision_portfolio.realized_pnl,
+                        unrealized_pnl=sum(
+                            (
+                                item.unrealized_pnl
+                                for item in decision_portfolio.positions
+                            ),
+                            Decimal(0),
+                        ),
+                        content_hash=hashlib.sha256(
+                            decision_payload.encode("utf-8")
+                        ).hexdigest(),
+                        details_json=decision_details,
+                    )
+                )
+                session.add(
+                    SignalBatchRecord(
+                        id=batch_id,
+                        portfolio_id=sizing_run.portfolio_id,
+                        decision_date=sizing_run.decision_date,
+                        fixture_version=batch.batch.fixture_version,
+                        cash_target_pct=batch.batch.cash_target_pct,
+                        status=batch.status.value,
+                        input_hash=batch.input_hash,
+                        decision_snapshot_id=decision_snapshot_id,
+                        created_at=now,
+                    )
+                )
+                signal_ids: dict[str, str] = {}
+                for signal in batch.batch.signals:
+                    signal_id = _stable_id("signal", f"{batch_id}:{signal.symbol}")
+                    signal_ids[signal.symbol] = signal_id
+                    session.add(
+                        SignalRecord(
+                            id=signal_id,
+                            batch_id=batch_id,
+                            symbol=signal.symbol,
+                            action=signal.action.value,
+                            target_position_pct=signal.target_position_pct,
+                            confidence=signal.confidence,
+                            thesis=signal.thesis,
+                            invalidation=signal.invalidation,
+                            created_at=now,
+                        )
+                    )
+                stored_orders = tuple(
+                    StoredOrder(signal_id=signal_ids[draft.symbol], **draft.model_dump())
+                    for draft in drafts
+                )
+                for order in stored_orders:
+                    session.add(_order_record(order, sizing_run.portfolio_id, now))
+
+                sizing_run_id = _stable_id("sizing", sizing_run.run_id)
+                session.add(
+                    PositionSizingRunRecord(
+                        id=sizing_run_id,
+                        run_id=sizing_run.run_id,
+                        portfolio_id=sizing_run.portfolio_id,
+                        portfolio_version=sizing_run.portfolio_version,
+                        decision_date=sizing_run.decision_date,
+                        planned_execution_date=sizing_run.planned_execution_date,
+                        sizing_version=sizing_run.sizing_version,
+                        config_json=sizing_config.model_dump(mode="json"),
+                        config_hash=sizing_run.config_hash,
+                        input_hash=sizing_run.input_hash,
+                        decision_portfolio_hash=hashlib.sha256(
+                            decision_payload.encode("utf-8")
+                        ).hexdigest(),
+                        target_batch_hash=sizing_run.target_batch_hash,
+                        gross_target_pct=sizing_run.gross_target_pct,
+                        cash_target_pct=sizing_run.cash_target_pct,
+                        run_code=sizing_run.run_code,
+                        signal_batch_id=batch_id,
+                        created_at=now,
+                    )
+                )
+                for target in sizing_run.targets:
+                    session.add(
+                        PositionTargetRecord(
+                            id=_stable_id(
+                                "sizing-target", f"{sizing_run_id}:{target.symbol}"
+                            ),
+                            sizing_run_id=sizing_run_id,
+                            decision_evaluation_id=target.decision_evaluation_id,
+                            symbol=target.symbol,
+                            requested_action=target.requested_action.value,
+                            sizing_status=target.status.value,
+                            current_position_pct=target.current_position_pct,
+                            raw_target_position_pct=target.raw_target_position_pct,
+                            target_position_pct=target.target_position_pct,
+                            signal_action=target.signal_action.value,
+                            block_code=target.block_code,
+                        )
+                    )
+                await session.flush()
+                return StoredSignalBatch(
+                    batch_id=batch_id,
+                    input_hash=batch.input_hash,
+                    orders=stored_orders,
+                )
+        except IntegrityError as exc:
+            raise PortfolioTransactionError("C_GROUP_ATOMIC_WRITE_FAILED") from exc
 
     async def find_signal_batch(self, batch: FixtureSignalBatch) -> StoredSignalBatch | None:
         async with self._session_factory() as session:
