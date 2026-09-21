@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为默认约 80 只 A 股冻结候选队列实现 C 组优先的 Jev 盈亏概率层，包括候选池/个股输入、真实标签、TypeSafe SDK Adapter、失败审计、持久化、幂等编排和显式 Live Test。
+**Goal:** 为容量可配置的 A 股冻结候选队列实现 C 组优先的 Jev 盈亏概率层，包括候选池/个股输入、真实标签、TypeSafe SDK Adapter、失败审计、持久化、幂等编排和显式 Live Test。
 
 **Architecture:** Phase 2 的不可变行情快照与确定性特征先转换为账户无关的 `JevUniverseStateV1` 和 `JevSymbolStateV1`；TypeSafe Adapter 使用有限 `Choice` 问题返回待校准概率。数据库以正式键协调并发调用并保存 Attempt、正式结果和完整概率；未来真实标签由独立纯函数从 D+1 后冻结行情计算，绝不进入正式预测输入。现有新闻语义 `JevSemanticFactorProvider` 保留，Phase 3 新链使用独立类型和文件。
 
@@ -14,7 +14,7 @@
 
 - 映射到需求 R7、R8、R10、R12、R14、R21、R23、R24、R26、R27、R29、R33、R37—R43。
 - C 组是第一版主链；Phase 3 优先交付 C 组所需 Jev 契约和真实标签，A/B/D 不得阻塞。
-- 默认候选目标为 80 只；合格证券不足时保留实际数量，不补入不合格证券。
+- 候选容量由 `candidate_limit` 显式配置且必须为正整数；不设产品级默认值，合格证券不足时保留实际数量，不补入不合格证券。
 - 正式评估集合为候选队列与现有持仓并集；`HELD_ONLY` 只属于编排元数据，不进入 Jev State。
 - Jev 只返回有限 `Choice` 概率，不返回连续收益率、因子权重、交易动作、仓位、价格或订单数量。
 - 第一版不存在动态因子权重、权重 Profile 或概率到权重映射。
@@ -29,7 +29,7 @@
 ## Review Focus
 
 1. 同一正式键发生两个并发请求时，合理行为是只有取得数据库 Claim 的请求调用 Jev，另一个读取进行中或已保存状态；Task 5 的并发测试固定该行为。
-2. 股票掉出 80 只队列但仍有持仓时，合理行为是仍生成个股 Jev 评估且 `HELD_ONLY` 不进入 State；Task 5 的持仓移出队列测试固定该行为。
+2. 股票掉出配置容量的队列但仍有持仓时，合理行为是仍生成个股 Jev 评估且 `HELD_ONLY` 不进入 State；Task 5 的持仓移出队列测试固定该行为。
 3. TypeSafe 返回完整标签但包含 NaN、Infinity、负数或概率和越界时，合理行为是整次 `CONTRACT_INVALID` 且保存 0 条正式概率；Task 3 的参数化测试固定该行为。
 4. D+1 停牌、无可成交开盘或只有不足 5 个未来交易日时，合理行为是 `LABEL_UNAVAILABLE` 而不是零收益；Task 2 的标签测试固定该行为。
 5. 旧新闻语义 Provider 与新行情盈亏 Provider 同时存在时，合理行为是类型、问题集、持久化 operation 和调用入口完全隔离；Task 3 与 Task 7 的兼容测试固定该行为。
@@ -51,7 +51,7 @@
 | `migrations/versions/0006_phase3_jev_pnl_probabilities.py` | Phase 3 表、唯一约束和可逆迁移 |
 | `tests/unit/test_jev_market_contracts.py` | 领域约束与 canonical hash |
 | `tests/unit/test_jev_market_questions.py` | 问题全集、Choice-only 与版本约束 |
-| `tests/unit/test_jev_state_builder.py` | 80 只边界、聚合、缺失和账户隔离 |
+| `tests/unit/test_jev_state_builder.py` | 配置容量边界、聚合、缺失和账户隔离 |
 | `tests/unit/test_forward_labels.py` | 1 日/5 日标签、MAE/MFE、费用和不可用语义 |
 | `tests/unit/test_jev_market_provider.py` | SDK 映射、严格概率校验、Provider 失败和旧 Provider 隔离 |
 | `tests/integration/test_jev_repository.py` | 迁移、Claim、Attempt、正式概率、失败原子性和重放 |
@@ -121,8 +121,8 @@ class JevStateHeaderV1(BaseModel):
     decision_cutoff: datetime
     candidate_universe_id: str
     candidate_universe_hash: str = Field(min_length=64, max_length=64)
-    candidate_target_size: int = Field(default=80, eq=80)
-    candidate_actual_size: int = Field(ge=0, le=80)
+    candidate_limit: int = Field(gt=0)
+    candidate_actual_size: int = Field(ge=0)
     market_snapshot_hash: str = Field(min_length=64, max_length=64)
     feature_set_version: str
     state_schema_version: Literal["jev-state-v1"] = "jev-state-v1"
@@ -248,7 +248,7 @@ git add src/fkqt_jevinvestor/domain/jev_market.py src/fkqt_jevinvestor/providers
 git commit -m "功能：冻结 Jev 盈亏概率领域契约"
 ```
 
-### Task 2: 构造 80 只候选状态并生成未来真实标签
+### Task 2: 构造可配置候选状态并生成未来真实标签
 
 **Requirements:** R10、R12、R14、R27、R29、R37、R38、R42、R43
 
@@ -264,7 +264,7 @@ git commit -m "功能：冻结 Jev 盈亏概率领域契约"
 
 - [ ] **Step 1: 编写 State Builder 失败测试**
 
-覆盖：81 个候选时报 `CANDIDATE_TARGET_EXCEEDED`；60 个合格候选保持 60 不补齐；候选池 median、advance ratio、above-MA20 ratio 和 coverage 使用 Decimal；必要特征缺失的证券保留稳定 `missing_reasons`；`held_only_symbols` 加入个股 State 但不改变候选池聚合；任何特征 `as_of > decision_cutoff` 报 `POINT_IN_TIME_VIOLATION`；输出 State 中不存在 news、cash、position、cost、PnL、future label 和 `HELD_ONLY` 字段。
+使用 `candidate_limit=20` 的 Fixture，覆盖：21 个候选时报 `CANDIDATE_TARGET_EXCEEDED`；12 个合格候选保持 12 不补齐；非正容量拒绝；候选池 median、advance ratio、above-MA20 ratio 和 coverage 使用 Decimal；必要特征缺失的证券保留稳定 `missing_reasons`；`held_only_symbols` 加入个股 State 但不改变候选池聚合；任何特征 `as_of > decision_cutoff` 报 `POINT_IN_TIME_VIOLATION`；输出 State 中不存在 news、cash、position、cost、PnL、future label 和 `HELD_ONLY` 字段。
 
 ```python
 def test_held_only_symbol_is_evaluated_but_not_in_universe_metrics() -> None:
@@ -273,6 +273,7 @@ def test_held_only_symbol_is_evaluated_but_not_in_universe_metrics() -> None:
         features=features_for(("A", "B", "HELD")),
         candidate_symbols=("A", "B"),
         held_only_symbols=("HELD",),
+        candidate_limit=20,
     )
     assert universe.header.candidate_actual_size == 2
     assert set(symbols) == {"A", "B", "HELD"}
@@ -287,7 +288,7 @@ Expected: collection FAIL，原因是 `jev_state_builder` 尚不存在。
 
 - [ ] **Step 3: 实现确定性 State Builder**
 
-`build_jev_states` 必须验证候选去重、排序、最多 80、快照覆盖、证券状态覆盖和时间截止。候选池聚合只使用候选证券，不使用 `HELD_ONLY`。median 使用排序后 Decimal 中位数；离散度使用 Decimal sample standard deviation；所有输出量化到 `Decimal("0.00000001")`。必要个股特征固定为设计文档第 4.3 节列出的 Phase 2 特征，不从原始 K 线在此重新计算。
+`build_jev_states` 必须接收 `candidate_limit: int`，验证容量为正、候选去重、排序、候选数量不超过容量、快照覆盖、证券状态覆盖和时间截止。候选池聚合只使用候选证券，不使用 `HELD_ONLY`。median 使用排序后 Decimal 中位数；离散度使用 Decimal sample standard deviation；所有输出量化到 `Decimal("0.00000001")`。必要个股特征固定为设计文档第 4.3 节列出的 Phase 2 特征，不从原始 K 线在此重新计算。
 
 - [ ] **Step 4: 运行 State Builder 测试并确认 GREEN**
 
@@ -574,6 +575,7 @@ class JevRunCommandV1(BaseModel):
     snapshot: MarketSnapshot
     features: Mapping[str, MarketFeatureSnapshot]
     candidate_symbols: tuple[str, ...]
+    candidate_limit: int = Field(gt=0)
     held_symbols: tuple[str, ...] = ()
     provider_name: str
     provider_version: str
@@ -628,7 +630,7 @@ Expected: `1 skipped`，0 failed，外部调用 0 次。
 
 - [ ] **Step 3: 编写完整运行手册**
 
-`docs/runbooks/jev-market-probabilities.md` 必须完整写出：环境变量、默认离线测试命令、显式 Live Test PowerShell 命令、80 只队列规则、队列外持仓规则、C 组数据流、五个问题与标签、真实标签公式、四种状态、重试/幂等行为、数据库审计查询、Secret 禁止项、常见错误和恢复步骤。不得记录实际 API Key。
+`docs/runbooks/jev-market-probabilities.md` 必须完整写出：环境变量、默认离线测试命令、显式 Live Test PowerShell 命令、`candidate_limit` 配置规则、队列外持仓规则、C 组数据流、五个问题与标签、真实标签公式、四种状态、重试/幂等行为、数据库审计查询、Secret 禁止项、常见错误和恢复步骤。不得记录实际 API Key。
 
 - [ ] **Step 4: 更新持久记录**
 
@@ -728,7 +730,7 @@ git commit -m "验收：完成 Phase 3 Jev 盈亏概率层"
 |---|---|---|---|
 | 需求映射 | R7、R8、R10、R12、R14、R21、R23、R24、R26、R27、R29、R33、R37—R43 全覆盖 | 对照每个 Task 的 Requirements | 必须 |
 | C 组优先 | C 组 Jev 契约先完成，A/B/D 无专属实现阻塞 | Task 1—5 文件清单 | 必须 |
-| 候选目标 | 默认 80，少于 80 不补齐 | Task 2/5 测试 | 必须 |
+| 候选容量 | 显式正整数配置，实际数量不超过容量 | Task 2/5 测试 | 必须 |
 | 队列外持仓 | 全部评估且 `HELD_ONLY` 不进 Jev State | Task 2/5 测试 | 必须 |
 | 未来数据 | 正式输入读取 D+1 标签 0 次 | Task 2/5 时间测试 | 必须 |
 | 因子配比 | 实现文件和问题数量 0 | 问题目录及源码扫描 | 必须 |
@@ -743,6 +745,6 @@ git commit -m "验收：完成 Phase 3 Jev 盈亏概率层"
 ## 已知问题
 
 1. Jev Early Access 的模型与 SDK 行为可能变化；版本和响应哈希可以识别漂移，但不能阻止第三方服务变化。
-2. 80 只股票逐日个股调用会产生明显调用量；正式键缓存和候选池一次复用可以避免重跑成本，但首次历史批量重评仍需单独预算。
+2. 候选容量增大会线性增加逐日 Jev 调用量；正式键缓存和候选池一次复用可以避免重跑成本，但首次历史批量重评仍需按实际容量单独预算。
 3. `0.2%` 与 `0.5%` 盈亏平坦区间是 `pnl-label-criteria-v1` 的研究假设，不代表已经验证的最优阈值；修改必须提升版本，不能覆盖历史标签。
 4. Phase 3 只生成 Jev 概率和真实标签，不包含 LLM 动作、仓位或 C 组 Target；首次真实 C 组回测仍依赖 Phase 4。

@@ -74,8 +74,8 @@ Python 确定性特征
 | `decision_cutoff` | datetime | 必须带时区；所有输入均不得晚于该时间 |
 | `candidate_universe_id` | str | 冻结候选池标识 |
 | `candidate_universe_hash` | str | 64 位小写 SHA-256 |
-| `candidate_target_size` | int | 第一版固定默认值 80 |
-| `candidate_actual_size` | int | 本次冻结队列的实际合格数量，不得大于目标数量 |
+| `candidate_limit` | int | 每次运行显式配置的正整数容量，不设产品级固定默认值 |
+| `candidate_actual_size` | int | 本次冻结队列的实际合格数量，不得大于 `candidate_limit` |
 | `market_snapshot_hash` | str | Phase 2 冻结快照哈希 |
 | `feature_set_version` | str | 确定性特征集合版本 |
 | `state_schema_version` | Literal | 固定为 `jev-state-v1` |
@@ -90,7 +90,7 @@ Python 确定性特征
 
 ### 4.2 候选池级输入 `JevUniverseStateV1`
 
-候选池级输入完全来源于同一份最多 80 只股票的冻结候选队列快照和 Phase 2 特征的确定性聚合，不要求新增基准指数数据。`HELD_ONLY` 证券不参与候选池聚合，避免账户持仓改变全部证券共享的候选池状态：
+候选池级输入完全来源于同一份不超过本次 `candidate_limit` 的冻结候选队列快照和 Phase 2 特征的确定性聚合，不要求新增基准指数数据。`HELD_ONLY` 证券不参与候选池聚合，避免账户持仓改变全部证券共享的候选池状态：
 
 | 分类 | 字段 |
 |---|---|
@@ -311,7 +311,7 @@ D 组映射器可以读取 `next_session_pnl`、`profitability_5d`、`drawdown_r
 | 候选池调用去重 | 同一正式键最多 1 次成功 Provider 调用 | 并发幂等单元测试 | 必须 |
 | 个股隔离 | 每个结果只对应 1 个证券和 1 个输入哈希 | Entity/Repository 测试 | 必须 |
 | Point-in-Time | 输入字段时间全部不晚于 `decision_cutoff` | 时间旅行失败测试 | 必须 |
-| 默认队列规模 | 目标 80，只保留实际合格证券 | 候选池契约测试 | 必须 |
+| 队列容量 | 显式正整数配置，实际数量不超过容量 | 候选池契约测试 | 必须 |
 | 队列外持仓 | 全部进入评估且不能 `ENTER` | 持仓移出队列集成测试 | 必须 |
 | 禁止输入 | 持仓、现金、新闻、未来标签字段为 0 | Schema 字段扫描 | 必须 |
 | 概率完整性 | 标签全集一致，概率和在契约容差内为 1 | Provider 契约测试 | 必须 |
@@ -338,7 +338,7 @@ D 组映射器可以读取 `next_session_pnl`、`profitability_5d`、`drawdown_r
 | 候选池级状态被每票重复调用 | 成本上升且结果可能不一致 | 候选池正式键唯一约束与调用去重 |
 | 把未校准预测当成真实概率 | 形成虚假置信度 | 报告明确标记预测概率并输出可靠性曲线、Brier Score 和 ECE |
 | 未来真实标签泄漏到输入 | 回测收益虚高 | 标签表与正式输入分域，Point-in-Time 测试强制失败 |
-| 80 只队列发生幸存者偏差 | 历史结果不可相信 | 保存每期队列版本、成员、生效时间和哈希，禁止回写 |
+| 候选队列发生幸存者偏差 | 历史结果不可相信 | 保存每期容量、成员、生效时间和哈希，禁止回写 |
 | 旧语义 Provider 与新 Provider 混用 | 审计含义不一致 | 不同 Protocol、表记录类型和服务入口 |
 
 ## 13. 文件边界
