@@ -12,6 +12,10 @@ from fkqt_jevinvestor.domain.portfolio import PortfolioState
 
 
 class ExperimentArm(StrEnum):
+    A_RULE = "A_RULE"
+    B_LLM = "B_LLM"
+    C_JEV_LLM = "C_JEV_LLM"
+    D_JEV_DIRECT = "D_JEV_DIRECT"
     A_LLM = "A_LLM"
     B_JEV_LLM = "B_JEV_LLM"
     C_JEV_DIRECT = "C_JEV_DIRECT"

@@ -91,6 +91,10 @@ from fkqt_jevinvestor.domain.portfolio import PortfolioState
 
 
 class ExperimentArm(StrEnum):
+    A_RULE = "A_RULE"
+    B_LLM = "B_LLM"
+    C_JEV_LLM = "C_JEV_LLM"
+    D_JEV_DIRECT = "D_JEV_DIRECT"
     A_LLM = "A_LLM"
     B_JEV_LLM = "B_JEV_LLM"
     C_JEV_DIRECT = "C_JEV_DIRECT"
@@ -248,6 +252,17 @@ class ExecutionPort(Protocol):
         market: Mapping[str, MarketExecutionSnapshot],
     ) -> BacktestExecutionResult: ...
 ```
+
+规范实验组名与 R26 的映射固定如下：
+
+| 规范枚举 | 决策链路 |
+|---|---|
+| `A_RULE` | 确定性规则 → 仓位引擎 |
+| `B_LLM` | 确定性特征 → LLM → 仓位引擎 |
+| `C_JEV_LLM` | 确定性特征 → Jev 盈亏概率 → LLM → 仓位引擎 |
+| `D_JEV_DIRECT` | 确定性特征 → Jev 盈亏概率 → 确定性动作映射 → 仓位引擎 |
+
+`A_LLM`、`B_JEV_LLM`、`C_JEV_DIRECT`、`D_RULE` 仅为已冻结代码的只读兼容成员。新回测配置、目标批次和结果不得继续写入旧枚举名。
 
 `backtest-contract-v1` 标签中的实际类型与本节必须逐字段一致；如果打标签前发现命名冲突，核心负责人必须同时修正文档和 Entity，禁止让 Contributor 自行猜测映射。
 

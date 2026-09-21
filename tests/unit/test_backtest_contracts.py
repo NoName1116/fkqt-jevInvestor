@@ -5,11 +5,23 @@ from fkqt_jevinvestor.domain.backtest import (
     BacktestConfig,
     DecisionReplayDay,
     ExecutionPort,
+    ExperimentArm,
     ReplayDataProvider,
     ReplayDay,
     TargetPositionBatch,
     TargetProvider,
 )
+
+
+def test_experiment_arm_has_canonical_names_without_removing_legacy_names() -> None:
+    assert ExperimentArm.A_RULE.value == "A_RULE"
+    assert ExperimentArm.B_LLM.value == "B_LLM"
+    assert ExperimentArm.C_JEV_LLM.value == "C_JEV_LLM"
+    assert ExperimentArm.D_JEV_DIRECT.value == "D_JEV_DIRECT"
+    assert ExperimentArm.A_LLM.value == "A_LLM"
+    assert ExperimentArm.B_JEV_LLM.value == "B_JEV_LLM"
+    assert ExperimentArm.C_JEV_DIRECT.value == "C_JEV_DIRECT"
+    assert ExperimentArm.D_RULE.value == "D_RULE"
 
 
 def test_backtest_contract_v1_public_names_are_importable() -> None:
