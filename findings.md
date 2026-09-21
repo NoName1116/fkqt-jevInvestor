@@ -188,3 +188,9 @@
 8. 用户明确要求优先使用最强的 DeepSeek 4.1 系列能力；Phase 4 因此冻结默认 `deepseek-flash` 与 `reasoning_effort=high`，并保留模型配置和实际调用模型审计字段。
 9. 现有 `ExperimentArm` 的 A/B/C/D 名称与 R26 含义相反；Phase 4 使用纯加法加入规范枚举，保留旧成员供 Contributor 代码读取，新记录只写规范名。
 10. 现有 Phase 1 Signal 表强制要求 `confidence`，但 LLM 不得输出或合成数值置信度；兼容 Adapter 固定写 `Decimal(0)` 表示 `NOT_PROVIDED`，正式 Decision/Sizing 契约不包含该字段。
+11. DeepSeek Responses API 的推理强度字段是 `reasoning={"effort": "high"}`；`reasoning_effort` 仅是配置名，不直接作为请求字段发送。
+12. C 组在调用 LLM 前验证 decision date、cutoff、D+1、候选池 hash、行情 hash 和 Jev 全证券覆盖；Jev 或特征失败会保存正式 `DATA_UNAVAILABLE/NO_SIGNAL`，不会调用备用模型。
+13. 同一 `run_id` 重放失败决策不会再次调用 Provider；不同 `run_id` 才能创建新的失败重试 Attempt，符合“重放不重评”的边界。
+14. 仓位计算固定为 `position-sizing-v1`，LLM 输出契约没有仓位、数量、价格或置信度字段；现有 Signal 兼容层中的 `confidence=0` 仅表示未提供，正式决策和仓位表不读取它。
+15. C 组冻结回测文件使用 `<root>/<dataset_id>/<decision_date>/<content_hash>.json`，写入采用临时文件加原子替换，加载时重新计算内容哈希并验证数据集、日期、三类输入 hash 和仓位版本。
+16. 单日 CLI 需要显式配置冻结 snapshot hash 和候选证券列表；候选列表不会由 LLM、Jev 或本地排序算法自行构造。缺少冻结输入或 Provider Secret 时，在创建 Client 前以稳定错误退出。

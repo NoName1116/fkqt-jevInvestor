@@ -48,6 +48,15 @@ class Settings(BaseSettings):
         default=Path("data/snapshots"),
         validation_alias="JEV_INVESTOR_MARKET_SNAPSHOT_ROOT",
     )
+    c_group_snapshot_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        validation_alias="JEV_INVESTOR_C_GROUP_SNAPSHOT_HASH",
+    )
+    c_group_candidate_symbols: str | None = Field(
+        default=None,
+        validation_alias="JEV_INVESTOR_C_GROUP_CANDIDATE_SYMBOLS",
+    )
 
 
 @lru_cache
