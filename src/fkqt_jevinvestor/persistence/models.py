@@ -329,12 +329,16 @@ class JevAttemptRecord(Base):
         ForeignKey("ai_signal_jev_evaluation.id", ondelete="CASCADE")
     )
     run_id: Mapped[str] = mapped_column(String(36))
+    owner_token: Mapped[str] = mapped_column(String(36))
     sequence: Mapped[int] = mapped_column(Integer)
     provider_name: Mapped[str] = mapped_column(String(64))
     provider_version: Mapped[str] = mapped_column(String(128))
     model_id: Mapped[str] = mapped_column(String(128))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     latency_ms: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32))
     raw_response_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

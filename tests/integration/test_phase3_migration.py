@@ -38,6 +38,10 @@ def _unique_columns(connection: sqlite3.Connection, table: str) -> set[tuple[str
     }
 
 
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
+
+
 def test_phase3_jev_tables_are_constrained_and_reversible(tmp_path: Path) -> None:
     database = tmp_path / "phase3.db"
     config = _config(database)
@@ -55,9 +59,11 @@ def test_phase3_jev_tables_are_constrained_and_reversible(tmp_path: Path) -> Non
         assert ("run_id", "evaluation_id") in _unique_columns(
             connection, "ai_signal_jev_run_link"
         )
+        assert {"owner_token", "lease_expires_at"} <= _columns(
+            connection, "ai_signal_jev_attempt"
+        )
 
     command.downgrade(config, "0005_phase2_audit_hardening")
     with sqlite3.connect(database) as connection:
         assert not (PHASE3_TABLES & _tables(connection))
         assert {"ai_signal_market_snapshot", "ai_signal_market_feature"} <= _tables(connection)
-

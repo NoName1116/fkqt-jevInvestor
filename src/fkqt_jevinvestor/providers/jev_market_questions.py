@@ -43,7 +43,8 @@ _DEFINITIONS = (
         label_order=("PROFIT", "FLAT", "LOSS"),
         instructions=(
             "Using only `state` available at the decision cutoff, classify the predicted net "
-            "return category from the next eligible session open to that session close."
+            "return category from the next eligible session open to that session close, "
+            "using the frozen round-trip cost 0.00100000 (round-trip-cost-v1)."
         ),
         criteria={
             "PROFIT": "Predicted net return is above 0.002 after the frozen cost assumption.",
@@ -59,7 +60,8 @@ _DEFINITIONS = (
         label_order=("PROFITABLE", "FLAT", "LOSS"),
         instructions=(
             "Using only `state` available at the decision cutoff, classify the predicted net "
-            "return category from the next eligible session open through the fifth session close."
+            "return category from the next eligible session open through the fifth session close, "
+            "using the frozen round-trip cost 0.00100000 (round-trip-cost-v1)."
         ),
         criteria={
             "PROFITABLE": "Predicted net return is above 0.005 after the frozen cost assumption.",

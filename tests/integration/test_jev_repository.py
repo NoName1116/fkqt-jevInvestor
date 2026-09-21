@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -9,8 +9,8 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from pydantic import ValidationError
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fkqt_jevinvestor.domain.jev_market import (
@@ -24,6 +24,7 @@ from fkqt_jevinvestor.domain.jev_market import (
 )
 from fkqt_jevinvestor.persistence.jev_repository import (
     ClaimStatus,
+    JevClaimConflict,
     JevEvaluationRepository,
 )
 from fkqt_jevinvestor.persistence.models import (
@@ -32,6 +33,7 @@ from fkqt_jevinvestor.persistence.models import (
     JevRunLinkRecord,
 )
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
+from fkqt_jevinvestor.providers.jev_market_questions import QUESTION_DEFINITIONS
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -75,30 +77,16 @@ def _command(*, security: dict[str, str] | None = None) -> JevEvaluationCommand:
 
 
 def _question(question_id: str = "profitability_5d") -> JevQuestionResultV1:
-    if question_id == "profitability_5d":
-        return JevQuestionResultV1(
-            question_id=question_id,
-            question_version="profitability-5d-v1",
-            criteria_version="pnl-label-criteria-v1",
-            label_order=("PROFITABLE", "FLAT", "LOSS"),
-            distribution={
-                "PROFITABLE": Decimal("0.580000"),
-                "FLAT": Decimal("0.240000"),
-                "LOSS": Decimal("0.180000"),
-            },
-            selected_label="PROFITABLE",
-        )
+    definition = QUESTION_DEFINITIONS[question_id]
+    distribution = {label: Decimal(0) for label in definition.label_order}
+    distribution[definition.label_order[0]] = Decimal(1)
     return JevQuestionResultV1(
-        question_id="data_sufficiency",
-        question_version="data-sufficiency-v1",
-        criteria_version="data-sufficiency-criteria-v1",
-        label_order=("SUFFICIENT", "LIMITED", "INSUFFICIENT"),
-        distribution={
-            "SUFFICIENT": Decimal("0.700000"),
-            "LIMITED": Decimal("0.200000"),
-            "INSUFFICIENT": Decimal("0.100000"),
-        },
-        selected_label="SUFFICIENT",
+        question_id=question_id,
+        question_version=definition.question_version,
+        criteria_version=definition.criteria_version,
+        label_order=definition.label_order,
+        distribution=distribution,
+        selected_label=definition.label_order[0],
     )
 
 
@@ -110,7 +98,11 @@ def _result(
     error_code: str | None = None,
 ) -> JevEvaluationV1:
     now = datetime(2026, 9, 18, 15, 0, 1, tzinfo=UTC)
-    available_results = results or (_question(), _question("data_sufficiency"))
+    available_results = results if results is not None else tuple(
+        _question(definition.question_id)
+        for definition in QUESTION_DEFINITIONS.values()
+        if definition.scope is JevScope.SYMBOL
+    )
     return JevEvaluationV1(
         evaluation_id=f"jev-{command_value.formal_key[:24]}",
         formal_key=command_value.formal_key,
@@ -173,8 +165,8 @@ async def test_success_round_trips_decimal_questions_atomically(
 
     assert loaded is not None
     assert loaded == expected
-    assert loaded.results[0].distribution["PROFITABLE"] == Decimal("0.580000")
-    assert await _count(session_factory, JevQuestionResultRecord) == 2
+    assert loaded.results[1].distribution["PROFITABLE"] == Decimal(1)
+    assert await _count(session_factory, JevQuestionResultRecord) == 5
 
 
 @pytest.mark.asyncio
@@ -187,7 +179,7 @@ async def test_duplicate_question_rolls_back_entire_success(
     duplicate = _question()
     invalid = _result(command_value).model_copy(update={"results": (duplicate, duplicate)})
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ValidationError, match="JEV_DUPLICATE_QUESTION_RESULT"):
         await repository.record_success(claim, invalid)
 
     assert await _count(session_factory, JevQuestionResultRecord) == 0
@@ -236,11 +228,12 @@ async def test_success_cannot_be_reclaimed(session_factory: SessionFactory) -> N
 async def test_two_concurrent_claims_have_one_owner(
     session_factory: SessionFactory,
 ) -> None:
-    repository = JevEvaluationRepository(session_factory)
+    first_repository = JevEvaluationRepository(session_factory)
+    second_repository = JevEvaluationRepository(session_factory)
     command_value = _command()
     claims = await asyncio.gather(
-        repository.claim(uuid4(), command_value),
-        repository.claim(uuid4(), command_value),
+        first_repository.claim(uuid4(), command_value),
+        second_repository.claim(uuid4(), command_value),
     )
 
     assert [claim.status for claim in claims].count(ClaimStatus.ACQUIRED) == 1
@@ -275,9 +268,61 @@ async def test_sensitive_state_key_is_rejected_before_persistence(
     session_factory: SessionFactory,
 ) -> None:
     repository = JevEvaluationRepository(session_factory)
-    command_value = _command(security={"market": "SSE", "api_key": "secret-value"})
+    command_value = _command()
+    bad_state = command_value.state.model_copy(
+        update={"security": {"market": "SSE", "api_key": "secret-value"}}
+    )
+    command_value = command_value.model_copy(update={"state": bad_state})
 
     with pytest.raises(ValueError, match="SENSITIVE_STATE_FIELD_FORBIDDEN"):
         await repository.claim(UUID(int=1), command_value)
 
     assert await _count(session_factory, JevAttemptRecord) == 0
+
+
+class MutableClock:
+    def __init__(self) -> None:
+        self.value = datetime(2026, 9, 18, 15, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.value
+
+
+@pytest.mark.asyncio
+async def test_expired_claim_is_reacquired_and_old_owner_cannot_commit(
+    session_factory: SessionFactory,
+) -> None:
+    clock = MutableClock()
+    first_repository = JevEvaluationRepository(
+        session_factory,
+        lease_duration=timedelta(seconds=30),
+        clock=clock,
+    )
+    second_repository = JevEvaluationRepository(
+        session_factory,
+        lease_duration=timedelta(seconds=30),
+        clock=clock,
+    )
+    command_value = _command()
+    first = await first_repository.claim(uuid4(), command_value)
+    clock.value += timedelta(seconds=31)
+
+    replacement = await second_repository.claim(uuid4(), command_value)
+
+    assert replacement.status == ClaimStatus.ACQUIRED
+    assert replacement.attempt_sequence == 2
+    with pytest.raises(JevClaimConflict, match="JEV_CLAIM_NOT_ACTIVE"):
+        await first_repository.record_success(first, _result(command_value))
+
+
+@pytest.mark.asyncio
+async def test_repository_rejects_result_metadata_mismatch(
+    session_factory: SessionFactory,
+) -> None:
+    repository = JevEvaluationRepository(session_factory)
+    command_value = _command()
+    claim = await repository.claim(uuid4(), command_value)
+    mismatched = _result(command_value).model_copy(update={"provider_name": "other"})
+
+    with pytest.raises(JevClaimConflict, match="JEV_RESULT_IDENTITY_MISMATCH"):
+        await repository.record_success(claim, mismatched)

@@ -9,6 +9,7 @@ from fkqt_jevinvestor.domain.market_features import (
     FeatureValue,
     MarketFeatureSnapshot,
     MarketSnapshot,
+    MarketSourceAudit,
     SecurityTradeState,
 )
 from fkqt_jevinvestor.services.jev_state_builder import build_jev_states
@@ -81,7 +82,19 @@ def _snapshot(symbols: tuple[str, ...]) -> MarketSnapshot:
             for symbol in symbols
         },
         source_manifest_ids=("manifest-1",),
-        source_audits=(),
+        source_audits=(
+            MarketSourceAudit(
+                upstream_type="FIXTURE",
+                upstream_version="v1",
+                request_scope={"symbols": list(symbols)},
+                data_cutoff=cutoff,
+                schema_version="schema-v1",
+                fetched_at=cutoff,
+                record_count=len(symbols),
+                raw_snapshot_ref="fixture",
+                content_hash="d" * 64,
+            ),
+        ),
         content_hash="b" * 64,
     )
 
@@ -237,6 +250,33 @@ def test_feature_after_decision_cutoff_is_rejected() -> None:
         )
 
 
+@pytest.mark.parametrize("future_kind", ["bar", "security", "audit"])
+def test_snapshot_future_data_is_rejected_at_jev_boundary(future_kind: str) -> None:
+    snapshot = _snapshot(("A",))
+    if future_kind == "bar":
+        future_bar = _bar("A").model_copy(update={"trade_date": date(2026, 9, 21)})
+        snapshot = snapshot.model_copy(update={"daily_bars": {"A": (future_bar,)}})
+    elif future_kind == "security":
+        future_state = snapshot.security_states["A"].model_copy(
+            update={"trade_date": date(2026, 9, 21)}
+        )
+        snapshot = snapshot.model_copy(update={"security_states": {"A": future_state}})
+    else:
+        late_audit = snapshot.source_audits[0].model_copy(
+            update={"data_cutoff": datetime(2026, 9, 18, 15, 0, 1, tzinfo=UTC)}
+        )
+        snapshot = snapshot.model_copy(update={"source_audits": (late_audit,)})
+
+    with pytest.raises(ValueError, match="POINT_IN_TIME_VIOLATION"):
+        build_jev_states(
+            snapshot=snapshot,
+            features=_features(("A",)),
+            candidate_symbols=("A",),
+            held_only_symbols=(),
+            candidate_limit=20,
+        )
+
+
 def test_state_excludes_forbidden_account_and_future_fields() -> None:
     universe, symbols = build_jev_states(
         snapshot=_snapshot(("A",)),
@@ -256,4 +296,3 @@ def test_state_excludes_forbidden_account_and_future_fields() -> None:
         "HELD_ONLY",
     ):
         assert forbidden.lower() not in payload.lower()
-

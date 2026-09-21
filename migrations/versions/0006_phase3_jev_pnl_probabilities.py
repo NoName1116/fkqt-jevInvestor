@@ -44,12 +44,14 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("run_id", sa.String(36), nullable=False),
+        sa.Column("owner_token", sa.String(36), nullable=False),
         sa.Column("sequence", sa.Integer, nullable=False),
         sa.Column("provider_name", sa.String(64), nullable=False),
         sa.Column("provider_version", sa.String(128), nullable=False),
         sa.Column("model_id", sa.String(128), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("latency_ms", sa.Integer, nullable=False),
         sa.Column("status", sa.String(32), nullable=False),
         sa.Column("raw_response_hash", sa.String(64), nullable=True),
@@ -105,4 +107,3 @@ def downgrade() -> None:
     op.drop_table("ai_signal_jev_question_result")
     op.drop_table("ai_signal_jev_attempt")
     op.drop_table("ai_signal_jev_evaluation")
-

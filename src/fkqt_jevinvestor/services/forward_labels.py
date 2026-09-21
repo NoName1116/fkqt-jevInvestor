@@ -6,10 +6,12 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fkqt_jevinvestor.domain.market_features import DailyBar
+from fkqt_jevinvestor.domain.market_features import DailyBar, SecurityTradeState
 
 _QUANTUM = Decimal("0.00000001")
 _DECIMAL_CONTEXT = Context(prec=50, rounding=ROUND_HALF_EVEN)
+PNL_LABEL_ROUND_TRIP_COST_V1 = Decimal("0.00100000")
+PNL_LABEL_COST_MODEL_VERSION_V1 = "round-trip-cost-v1"
 
 
 class ForwardLabelStatus(StrEnum):
@@ -32,12 +34,17 @@ class ForwardPnlLabelsV1(BaseModel):
     net_return_5d: Decimal | None
     mae_5d: Decimal | None
     mfe_5d: Decimal | None
+    round_trip_cost: Decimal = PNL_LABEL_ROUND_TRIP_COST_V1
+    cost_model_version: Literal["round-trip-cost-v1"] = PNL_LABEL_COST_MODEL_VERSION_V1
     criteria_version: Literal["pnl-label-criteria-v1"] = "pnl-label-criteria-v1"
     source_snapshot_hash: str = Field(min_length=64, max_length=64)
+    calendar_snapshot_hash: str = Field(min_length=64, max_length=64)
     missing_reason: str | None = None
 
     @model_validator(mode="after")
     def validate_status_payload(self) -> Self:
+        if self.round_trip_cost != PNL_LABEL_ROUND_TRIP_COST_V1:
+            raise ValueError("PNL_LABEL_COST_CONFIG_MISMATCH")
         label_fields = (
             self.next_session_pnl,
             self.profitability_5d,
@@ -72,6 +79,7 @@ def _unavailable(
     *,
     decision_date: date,
     source_snapshot_hash: str,
+    calendar_snapshot_hash: str,
     missing_reason: str,
     d1_date: date | None = None,
     d5_date: date | None = None,
@@ -89,7 +97,10 @@ def _unavailable(
         net_return_5d=None,
         mae_5d=None,
         mfe_5d=None,
+        round_trip_cost=PNL_LABEL_ROUND_TRIP_COST_V1,
+        cost_model_version=PNL_LABEL_COST_MODEL_VERSION_V1,
         source_snapshot_hash=source_snapshot_hash,
+        calendar_snapshot_hash=calendar_snapshot_hash,
         missing_reason=missing_reason,
     )
 
@@ -134,19 +145,32 @@ def build_forward_pnl_labels(
     *,
     decision_date: date,
     future_bars: tuple[DailyBar, ...],
+    expected_trade_dates: tuple[date, ...],
+    d1_state: SecurityTradeState,
     round_trip_cost: Decimal,
     source_snapshot_hash: str,
+    calendar_snapshot_hash: str,
 ) -> ForwardPnlLabelsV1:
-    if round_trip_cost < 0 or round_trip_cost >= 1:
+    if round_trip_cost != PNL_LABEL_ROUND_TRIP_COST_V1:
+        raise ValueError("PNL_LABEL_COST_CONFIG_MISMATCH")
+    if (
+        len(expected_trade_dates) != 5
+        or expected_trade_dates[0] <= decision_date
+        or any(
+            current >= following for current, following in pairwise(expected_trade_dates)
+        )
+    ):
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
-            missing_reason="ROUND_TRIP_COST_INVALID",
+            calendar_snapshot_hash=calendar_snapshot_hash,
+            missing_reason="FUTURE_TRADE_CALENDAR_INVALID",
         )
     if not future_bars:
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
+            calendar_snapshot_hash=calendar_snapshot_hash,
             missing_reason="D1_EXECUTION_BAR_UNAVAILABLE",
         )
     first_bar = future_bars[0]
@@ -154,6 +178,7 @@ def build_forward_pnl_labels(
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
+            calendar_snapshot_hash=calendar_snapshot_hash,
             missing_reason="FIVE_SESSION_WINDOW_INCOMPLETE",
             d1_date=first_bar.trade_date,
         )
@@ -161,6 +186,7 @@ def build_forward_pnl_labels(
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
+            calendar_snapshot_hash=calendar_snapshot_hash,
             missing_reason="FIVE_SESSION_WINDOW_INVALID",
         )
 
@@ -170,22 +196,38 @@ def build_forward_pnl_labels(
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
+            calendar_snapshot_hash=calendar_snapshot_hash,
             missing_reason="FUTURE_BAR_DATE_INVALID",
             d1_date=d1_date,
             d5_date=d5_date,
         )
-    if any(current >= following for current, following in pairwise(dates)):
+    if dates != expected_trade_dates:
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
-            missing_reason="FUTURE_BAR_ORDER_INVALID",
+            calendar_snapshot_hash=calendar_snapshot_hash,
+            missing_reason="FUTURE_BAR_DATE_MAPPING_INVALID",
             d1_date=d1_date,
             d5_date=d5_date,
         )
-    if future_bars[0].volume <= 0 or future_bars[0].amount_cny <= 0:
+    if (
+        d1_state.trade_date != expected_trade_dates[0]
+        or d1_state.symbol != first_bar.symbol
+        or d1_state.trading_day_status != "OPEN"
+        or d1_state.trading_status != "TRADING"
+        or d1_state.missing_reasons
+        or first_bar.volume <= 0
+        or first_bar.amount_cny <= 0
+        or (
+            first_bar.open == first_bar.high == first_bar.low
+            and first_bar.open
+            in {d1_state.upper_limit_price, d1_state.lower_limit_price}
+        )
+    ):
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
+            calendar_snapshot_hash=calendar_snapshot_hash,
             missing_reason="D1_EXECUTION_BAR_UNAVAILABLE",
             d1_date=d1_date,
             d5_date=d5_date,
@@ -194,6 +236,7 @@ def build_forward_pnl_labels(
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
+            calendar_snapshot_hash=calendar_snapshot_hash,
             missing_reason="FUTURE_BAR_SYMBOL_MISMATCH",
             d1_date=d1_date,
             d5_date=d5_date,
@@ -202,13 +245,14 @@ def build_forward_pnl_labels(
         return _unavailable(
             decision_date=decision_date,
             source_snapshot_hash=source_snapshot_hash,
+            calendar_snapshot_hash=calendar_snapshot_hash,
             missing_reason="ADJUSTMENT_MODE_MISMATCH",
             d1_date=d1_date,
             d5_date=d5_date,
         )
 
     with localcontext(_DECIMAL_CONTEXT):
-        entry_open = future_bars[0].open
+        entry_open = first_bar.open
         net_return_1d = future_bars[0].close / entry_open - 1 - round_trip_cost
         net_return_5d = future_bars[4].close / entry_open - 1 - round_trip_cost
         mae_5d = min(
@@ -233,6 +277,9 @@ def build_forward_pnl_labels(
         net_return_5d=_quantize(net_return_5d),
         mae_5d=_quantize(mae_5d),
         mfe_5d=_quantize(mfe_5d),
+        round_trip_cost=PNL_LABEL_ROUND_TRIP_COST_V1,
+        cost_model_version=PNL_LABEL_COST_MODEL_VERSION_V1,
         source_snapshot_hash=source_snapshot_hash,
+        calendar_snapshot_hash=calendar_snapshot_hash,
         missing_reason=None,
     )

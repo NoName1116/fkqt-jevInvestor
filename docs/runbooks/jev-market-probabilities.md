@@ -24,7 +24,7 @@ Phase 3 到 Jev 概率为止，不产生 `ENTER`、`KEEP`、`EXIT`、`AVOID`，�
 ## 2. 前置条件
 
 - Python：3.12 或 3.13。
-- 项目开发依赖已安装。
+- 项目开发依赖已安装，TypeSafe SDK 固定为 `typesafe-sdk==0.7.0`。
 - 数据库已升级到 `0006_phase3_jev_pnl_probabilities`。
 - 正式输入来自已冻结的候选池、行情快照和 Phase 2 特征。
 - 只有 Live Contract Probe（真实契约探测）需要 TypeSafe 网络权限和有效 API Key。
@@ -115,7 +115,7 @@ Remove-Item Env:TYPESAFE_JEV_MODEL
 
 ## 9. 真实标签公式
 
-真实标签只在评估阶段由代码使用 D+1 至 D+5 冻结行情生成，不进入 D 日 Jev 输入：
+真实标签只在评估阶段由代码使用 D+1 至 D+5 冻结行情生成，不进入 D 日 Jev 输入。`pnl-label-criteria-v1` 固定使用 `round-trip-cost-v1 = 0.00100000`；成本、阈值或公式变化必须提升版本：
 
 ```text
 entry_open = open(D+1)
@@ -130,7 +130,7 @@ mfe_5d = max(0, max(high(D+1..D+5) / entry_open - 1))
 - 5 日：大于 `0.005` 为 `PROFITABLE`，小于 `-0.005` 为 `LOSS`，闭区间内为 `FLAT`。
 - MAE：绝对值不超过 `0.02` 为 `LOW`；大于 `0.02` 且不超过 `0.05` 为 `MEDIUM`；超过 `0.05` 为 `HIGH`。
 - Payoff：MFE 至少是绝对 MAE 的 `1.5` 倍为 `UPSIDE_DOMINANT`；绝对 MAE 至少是 MFE 的 `1.5` 倍为 `DOWNSIDE_DOMINANT`；其余为 `BALANCED`；两者同为 0 也为 `BALANCED`。
-- D+1 不可成交、五个有效交易日不完整、日期映射错误或复权口径不一致时为 `LABEL_UNAVAILABLE`，所有数值和分类字段保持空值。
+- 五个日期必须逐项匹配冻结交易日历，并保存交易日历快照哈希。D+1 停牌、成交量或成交额为零、一字涨跌停锁死、五个有效交易日不完整、日期映射错误或复权口径不一致时为 `LABEL_UNAVAILABLE`，所有数值和分类字段保持空值。
 
 ## 10. 评估状态
 
@@ -148,6 +148,7 @@ Repository 内部还使用 `IN_PROGRESS` 表示 Claim 已被一个调用者取�
 - 正式键由 scope、State 输入哈希、Provider、Provider 版本、模型和问题集版本组成；`run_id` 不进入正式键。
 - 首次 Claim 返回 `ACQUIRED` 并创建 Attempt 1；只有获得 Claim 的调用者能访问 Provider。
 - 同一正式键执行中返回 `IN_PROGRESS`，不得再调用 Provider。
+- 每个 `IN_PROGRESS` Attempt 带 5 分钟 lease 和 owner token；lease 过期后下一调用者创建新序号 Attempt，旧 owner 的迟到提交被拒绝。
 - 成功后返回 `COMPLETE`，直接复用已保存概率，不新增 Attempt。
 - 失败后允许再次 Claim，新 Attempt 序号递增，旧 Attempt 保留。
 - 每个使用结果的 `run_id` 都写入 RunLink；同一运行重复使用不会产生重复 RunLink。
@@ -169,7 +170,7 @@ ORDER BY decision_date, scope, symbol;
 
 ```sql
 SELECT evaluation_id, run_id, sequence, status, started_at, finished_at,
-       latency_ms, raw_response_hash, error_code
+       lease_expires_at, latency_ms, raw_response_hash, error_code
 FROM ai_signal_jev_attempt
 ORDER BY evaluation_id, sequence;
 ```
@@ -214,7 +215,7 @@ Provider 契约错误只保存清理后 canonical response hash。网络错误�
 | `DATA_UNAVAILABLE` | 必要 Phase 2 特征缺失 | 查看 State 的 `missing_reasons`；修复上游数据后生成新冻结快照和输入哈希 |
 | `POINT_IN_TIME_VIOLATION` | 特征时间晚于决策截止 | 丢弃整次错误输入，重新冻结满足截止时间的数据 |
 | `CANDIDATE_TARGET_EXCEEDED` | 候选数超过本次显式容量 | 修复上游队列配置并生成新队列版本；不得截断旧历史快照 |
-| 长期 `IN_PROGRESS` | 进程在获得 Claim 后异常退出 | 先核对进程和 Attempt；当前版本不自动抢占，必须由运维确认后按独立恢复流程处理数据库状态 |
+| 长期 `IN_PROGRESS` | 进程在获得 Claim 后异常退出，或系统时钟异常 | 等待 5 分钟 lease 到期后用相同正式输入重新运行；确认新 Attempt 序号递增且旧 owner 迟到写入被拒绝 |
 | `LABEL_UNAVAILABLE` | D+1 不可成交、未来窗口不足或复权不一致 | 等待完整冻结行情或修复数据；不得填 0 收益 |
 
 ## 15. 验收清单
@@ -229,4 +230,3 @@ Provider 契约错误只保存清理后 canonical response hash。网络错误�
 | 跨运行缓存 | 成功复用不新增 Attempt | Service/Repository Integration Test | 必需 |
 | 失败概率 | 0 条 QuestionResult | Repository Integration Test | 必需 |
 | Secret | Git 和数据库中无明文 | Secret Scan 与审计查询 | 必需 |
-

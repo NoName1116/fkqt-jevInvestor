@@ -16,7 +16,7 @@ dependencies = [
   "pydantic-settings>=2.5,<3",
   "pyarrow>=17,<24",
   "sqlalchemy[asyncio]>=2.0,<3",
-  "typesafe-sdk>=0.1,<1",
+  "typesafe-sdk==0.7.0",
   "uvicorn[standard]>=0.30,<1",
 ]
 

@@ -1,10 +1,11 @@
 import asyncio
 import hashlib
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
@@ -45,6 +46,7 @@ class JevClaim(BaseModel):
     evaluation_id: str
     formal_key: str = Field(min_length=64, max_length=64)
     attempt_id: str | None
+    owner_token: str | None = None
     attempt_sequence: int | None = Field(default=None, ge=1)
     existing_result: JevEvaluationV1 | None = None
 
@@ -112,6 +114,13 @@ def _validate_result_identity(
         or result.evaluation_id != record.id
         or result.formal_key != record.formal_key
         or result.input_hash != record.input_hash
+        or result.scope.value != record.scope
+        or result.symbol != record.symbol
+        or result.provider_name != record.provider_name
+        or result.provider_version != record.provider_version
+        or result.model_id != record.model_id
+        or result.state_schema_version != record.state_schema_version
+        or result.question_set_version != record.question_set_version
     ):
         raise JevClaimConflict("JEV_RESULT_IDENTITY_MISMATCH")
 
@@ -137,8 +146,18 @@ def _attempt_audit(record: JevAttemptRecord) -> JevAttemptAudit:
 
 
 class JevEvaluationRepository:
-    def __init__(self, session_factory: SessionFactory) -> None:
+    def __init__(
+        self,
+        session_factory: SessionFactory,
+        *,
+        lease_duration: timedelta = timedelta(minutes=5),
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        if lease_duration <= timedelta(0):
+            raise ValueError("JEV_LEASE_DURATION_INVALID")
         self._session_factory = session_factory
+        self._lease_duration = lease_duration
+        self._clock = clock
         self._claim_lock = asyncio.Lock()
 
     async def claim(self, run_id: UUID, command: JevEvaluationCommand) -> JevClaim:
@@ -167,6 +186,23 @@ class JevEvaluationRepository:
                             existing_result=existing,
                         )
                     if record.status == JevEvaluationStatus.IN_PROGRESS.value:
+                        attempt = await session.scalar(
+                            select(JevAttemptRecord).where(
+                                JevAttemptRecord.evaluation_id == record.id,
+                                JevAttemptRecord.sequence
+                                == record.latest_attempt_sequence,
+                            )
+                        )
+                        now = self._clock()
+                        if (
+                            attempt is not None
+                            and attempt.lease_expires_at is not None
+                            and _stored_utc(attempt.lease_expires_at) <= as_utc(now)
+                        ):
+                            self._expire_attempt(attempt, now)
+                            return await self._retry_claim(
+                                session, run_id, command, record
+                            )
                         return JevClaim(
                             status=ClaimStatus.IN_PROGRESS,
                             evaluation_id=record.id,
@@ -183,6 +219,7 @@ class JevEvaluationRepository:
         claim: JevClaim,
         result: JevEvaluationV1,
     ) -> JevEvaluationV1:
+        result = JevEvaluationV1.model_validate(result.model_dump())
         if result.status is not JevEvaluationStatus.AVAILABLE:
             raise ValueError("JEV_SUCCESS_STATUS_REQUIRED")
         async with self._session_factory.begin() as session:
@@ -217,6 +254,7 @@ class JevEvaluationRepository:
         claim: JevClaim,
         result: JevEvaluationV1,
     ) -> JevEvaluationV1:
+        result = JevEvaluationV1.model_validate(result.model_dump())
         if result.status in {
             JevEvaluationStatus.AVAILABLE,
             JevEvaluationStatus.IN_PROGRESS,
@@ -272,7 +310,7 @@ class JevEvaluationRepository:
         command: JevEvaluationCommand,
         state_json: dict[str, Any],
     ) -> JevClaim:
-        now = datetime.now(UTC)
+        now = self._clock()
         evaluation_id = f"jev-{command.formal_key[:24]}"
         record = JevEvaluationRecord(
             id=evaluation_id,
@@ -299,7 +337,18 @@ class JevEvaluationRepository:
         )
         session.add(record)
         attempt_id = _stable_id("jeva", evaluation_id, 1)
-        session.add(self._new_attempt(attempt_id, evaluation_id, run_id, 1, command, now))
+        owner_token = str(uuid4())
+        session.add(
+            self._new_attempt(
+                attempt_id,
+                evaluation_id,
+                run_id,
+                owner_token,
+                1,
+                command,
+                now,
+            )
+        )
         await self._ensure_run_link(session, run_id, evaluation_id)
         await session.flush()
         return JevClaim(
@@ -307,6 +356,7 @@ class JevEvaluationRepository:
             evaluation_id=evaluation_id,
             formal_key=command.formal_key,
             attempt_id=attempt_id,
+            owner_token=owner_token,
             attempt_sequence=1,
         )
 
@@ -318,9 +368,20 @@ class JevEvaluationRepository:
         record: JevEvaluationRecord,
     ) -> JevClaim:
         sequence = record.latest_attempt_sequence + 1
-        now = datetime.now(UTC)
+        now = self._clock()
         attempt_id = _stable_id("jeva", record.id, sequence)
-        session.add(self._new_attempt(attempt_id, record.id, run_id, sequence, command, now))
+        owner_token = str(uuid4())
+        session.add(
+            self._new_attempt(
+                attempt_id,
+                record.id,
+                run_id,
+                owner_token,
+                sequence,
+                command,
+                now,
+            )
+        )
         record.status = JevEvaluationStatus.IN_PROGRESS.value
         record.latest_attempt_sequence = sequence
         record.updated_at = now
@@ -330,14 +391,16 @@ class JevEvaluationRepository:
             evaluation_id=record.id,
             formal_key=record.formal_key,
             attempt_id=attempt_id,
+            owner_token=owner_token,
             attempt_sequence=sequence,
         )
 
-    @staticmethod
     def _new_attempt(
+        self,
         attempt_id: str,
         evaluation_id: str,
         run_id: UUID,
+        owner_token: str,
         sequence: int,
         command: JevEvaluationCommand,
         now: datetime,
@@ -346,12 +409,14 @@ class JevEvaluationRepository:
             id=attempt_id,
             evaluation_id=evaluation_id,
             run_id=str(run_id),
+            owner_token=owner_token,
             sequence=sequence,
             provider_name=command.provider_name,
             provider_version=command.provider_version,
             model_id=command.model_id,
             started_at=now,
             finished_at=None,
+            lease_expires_at=now + self._lease_duration,
             latency_ms=0,
             status=JevEvaluationStatus.IN_PROGRESS.value,
             raw_response_hash=None,
@@ -427,6 +492,8 @@ class JevEvaluationRepository:
             record.status != JevEvaluationStatus.IN_PROGRESS.value
             or attempt.status != JevEvaluationStatus.IN_PROGRESS.value
             or attempt.sequence != claim.attempt_sequence
+            or record.latest_attempt_sequence != claim.attempt_sequence
+            or attempt.owner_token != claim.owner_token
         ):
             raise JevClaimConflict("JEV_CLAIM_NOT_ACTIVE")
         return record, attempt
@@ -441,10 +508,23 @@ class JevEvaluationRepository:
         record.updated_at = as_utc(result.finished_at)
         attempt.started_at = as_utc(result.started_at)
         attempt.finished_at = as_utc(result.finished_at)
+        attempt.lease_expires_at = None
         attempt.latency_ms = result.latency_ms
         attempt.status = result.status.value
         attempt.raw_response_hash = result.raw_response_hash
         attempt.error_code = result.error_code
+
+    @staticmethod
+    def _expire_attempt(attempt: JevAttemptRecord, now: datetime) -> None:
+        started_at = _stored_utc(attempt.started_at)
+        finished_at = as_utc(now)
+        attempt.finished_at = finished_at
+        attempt.lease_expires_at = None
+        attempt.latency_ms = max(
+            0, round((finished_at - started_at).total_seconds() * 1000)
+        )
+        attempt.status = JevEvaluationStatus.PROVIDER_UNAVAILABLE.value
+        attempt.error_code = "CLAIM_LEASE_EXPIRED"
 
     @staticmethod
     async def _load_record(

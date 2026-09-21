@@ -26,6 +26,7 @@ from fkqt_jevinvestor.domain.market_features import (
     FeatureValue,
     MarketFeatureSnapshot,
     MarketSnapshot,
+    MarketSourceAudit,
     SecurityTradeState,
 )
 from fkqt_jevinvestor.persistence.jev_repository import JevEvaluationRepository
@@ -62,9 +63,11 @@ class FakeProvider:
         *,
         failure: Exception | None = None,
         gate: asyncio.Event | None = None,
+        delay_seconds: float = 0,
     ) -> None:
         self.failure = failure
         self.gate = gate
+        self.delay_seconds = delay_seconds
         self.universe_calls = 0
         self.symbol_calls = 0
         self.states: list[str] = []
@@ -77,6 +80,8 @@ class FakeProvider:
         self.states.append(command.state.model_dump_json())
         if self.gate is not None and command.scope is JevScope.UNIVERSE:
             await self.gate.wait()
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
         if self.failure is not None:
             raise self.failure
         now = datetime(2026, 9, 18, 15, 0, 1, tzinfo=UTC)
@@ -179,14 +184,28 @@ def _run_command(
             for symbol in symbols
         },
         source_manifest_ids=("manifest-1",),
-        source_audits=(),
+        source_audits=(
+            MarketSourceAudit(
+                upstream_type="FIXTURE",
+                upstream_version="v1",
+                request_scope={"symbols": list(symbols)},
+                data_cutoff=cutoff,
+                schema_version="schema-v1",
+                fetched_at=cutoff,
+                record_count=len(symbols),
+                raw_snapshot_ref="fixture",
+                content_hash="e" * 64,
+            ),
+        ),
         content_hash="b" * 64,
     )
     features: dict[str, MarketFeatureSnapshot] = {}
     for symbol in symbols:
         values: dict[str, FeatureValue] = {}
         for index, code in enumerate(REQUIRED_SYMBOL_FEATURES, start=1):
-            is_missing = symbol == missing_symbol and code == "return_60d"
+            is_missing = missing_symbol == "ALL" or (
+                symbol == missing_symbol and code == "return_60d"
+            )
             values[code] = FeatureValue(
                 feature_code=code,
                 feature_version="market-features-v1",
@@ -264,6 +283,27 @@ async def test_missing_required_feature_records_data_unavailable_without_symbol_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("empty_kind", ["no_candidates", "all_missing"])
+async def test_universe_without_required_aggregate_data_skips_provider(
+    session_factory: SessionFactory,
+    empty_kind: str,
+) -> None:
+    provider = FakeProvider()
+    service = _service(session_factory, provider)
+    run_command = _run_command(missing_symbol="ALL" if empty_kind == "all_missing" else None)
+    if empty_kind == "no_candidates":
+        run_command = run_command.model_copy(
+            update={"candidate_symbols": (), "held_symbols": ("HELD",)}
+        )
+
+    result = await service.evaluate_run(run_command)
+
+    assert result.universe.status == JevEvaluationStatus.DATA_UNAVAILABLE
+    assert result.universe.results == ()
+    assert provider.universe_calls == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failure", "status", "response_hash"),
     [
@@ -294,6 +334,23 @@ async def test_provider_failure_is_audited_without_fake_probabilities(
     assert all(item.status == status for item in evaluations)
     assert all(item.results == () for item in evaluations)
     assert all(item.raw_response_hash == response_hash for item in evaluations)
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_preserves_real_latency(
+    session_factory: SessionFactory,
+) -> None:
+    provider = FakeProvider(
+        failure=ProviderUnavailableError("TimeoutError"),
+        delay_seconds=0.01,
+    )
+    service = _service(session_factory, provider)
+
+    result = await service.evaluate_run(_run_command())
+
+    assert result.universe.status == JevEvaluationStatus.PROVIDER_UNAVAILABLE
+    assert result.universe.latency_ms >= 5
+    assert result.universe.finished_at > result.universe.started_at
 
 
 @pytest.mark.asyncio

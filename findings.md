@@ -163,3 +163,11 @@
 14. Alembic 独立临时 SQLite 完成 `upgrade head → downgrade 0005 → upgrade head`，最终为 `0006_phase3_jev_pnl_probabilities (head)`。
 15. Secret 扫描未发现实际凭据；命中项仅为空 `.env.example`、扫描正则文本和运行手册中的密码管理器占位符。
 16. 旧语义 Provider、新行情 Provider和回测契约兼容测试为 `20 passed`；静态修正涉及的标签、Repository 和编排定点回归为 `37 passed`。
+17. 独立 Phase 3 审查发现费用版本、问题集完整性、State 白名单、Jev 边界 Point-in-Time、真实标签交易日/可成交性、空候选池、Claim lease 和失败延迟审计问题；全部映射到 R15/R16/R22/R39/R40/R42 并进入阻断修复。
+18. `pnl-label-criteria-v1` 现在固定 `round-trip-cost-v1 = 0.00100000`，标签实体保存成本、成本版本、行情哈希和交易日历哈希；D+1 至 D+5 必须匹配冻结交易日历，D+1 必须通过停牌与一字涨跌停可成交校验。
+19. `AVAILABLE` 结果按 scope 强制完整问题集和冻结问题契约；Jev State 使用字段白名单，Provider 在外部调用前重新验证 State。
+20. Jev Builder 在独立入口再次校验决策截止、来源审计、日线日期和证券状态日期；空候选池或必要聚合缺失记录 `DATA_UNAVAILABLE`，不调用 Provider。
+21. Attempt 增加 lease 与 owner token；过期后新 owner 使用递增序号接管，旧 owner 无法提交。Provider 失败保存真实开始、结束和延迟，不再固定为 0。
+22. 独立审查修复后的 Phase 3 定向回归为 `98 passed`；回测契约另行定点回归为 `2 passed`。
+23. 审查修复后 Ruff 为 `All checks passed!`，Pyright 为 `0 errors, 0 warnings, 0 informations`，Alembic 临时库再次完成 `0006 → 0005 → 0006` 并停在 `0006_phase3_jev_pnl_probabilities (head)`。
+24. TypeSafe SDK 依赖从宽泛的 `<1` 收紧为已验证的 `typesafe-sdk==0.7.0`，并新增真实 `SystemOneResponse`/`ChoiceAnswer` 离线契约测试。

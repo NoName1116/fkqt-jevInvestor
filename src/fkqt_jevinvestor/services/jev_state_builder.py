@@ -11,6 +11,7 @@ from fkqt_jevinvestor.domain.market_features import (
     MarketFeatureSnapshot,
     MarketSnapshot,
 )
+from fkqt_jevinvestor.domain.market_time import as_utc, validate_decision_cutoff
 
 _QUANTUM = Decimal("0.00000001")
 _DECIMAL_CONTEXT = Context(prec=50, rounding=ROUND_HALF_EVEN)
@@ -44,9 +45,9 @@ def _quantize(value: Decimal) -> Decimal:
         return value.quantize(_QUANTUM)
 
 
-def _median(values: Sequence[Decimal]) -> Decimal:
+def _median(values: Sequence[Decimal]) -> Decimal | None:
     if not values:
-        return Decimal("0.00000000")
+        return None
     ordered = sorted(values)
     midpoint = len(ordered) // 2
     if len(ordered) % 2:
@@ -54,14 +55,16 @@ def _median(values: Sequence[Decimal]) -> Decimal:
     return _quantize((ordered[midpoint - 1] + ordered[midpoint]) / Decimal(2))
 
 
-def _ratio(matches: int, total: int) -> Decimal:
+def _ratio(matches: int, total: int) -> Decimal | None:
     if total == 0:
-        return Decimal("0.00000000")
+        return None
     return _quantize(Decimal(matches) / Decimal(total))
 
 
-def _sample_standard_deviation(values: Sequence[Decimal]) -> Decimal:
-    if len(values) < 2:
+def _sample_standard_deviation(values: Sequence[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    if len(values) == 1:
         return Decimal("0.00000000")
     with localcontext(_DECIMAL_CONTEXT):
         average = sum(values, Decimal(0)) / Decimal(len(values))
@@ -79,10 +82,31 @@ def _require_symbols(
     for symbol in symbols:
         if (
             symbol not in snapshot.daily_bars
+            or not snapshot.daily_bars[symbol]
             or symbol not in snapshot.security_states
             or symbol not in features
         ):
             raise ValueError(f"SNAPSHOT_SYMBOL_COVERAGE_MISSING:{symbol}")
+
+
+def _validate_snapshot_point_in_time(snapshot: MarketSnapshot) -> None:
+    validate_decision_cutoff(snapshot.decision_date, snapshot.decision_cutoff)
+    if not snapshot.source_audits:
+        raise ValueError("SOURCE_AUDIT_REQUIRED")
+    cutoff = as_utc(snapshot.decision_cutoff)
+    if any(as_utc(audit.data_cutoff) > cutoff for audit in snapshot.source_audits):
+        raise ValueError("POINT_IN_TIME_VIOLATION")
+    if any(
+        bar.trade_date > snapshot.decision_date
+        for bars in snapshot.daily_bars.values()
+        for bar in bars
+    ):
+        raise ValueError("POINT_IN_TIME_VIOLATION")
+    if any(
+        state.trade_date != snapshot.decision_date
+        for state in snapshot.security_states.values()
+    ):
+        raise ValueError("POINT_IN_TIME_VIOLATION")
 
 
 def _validate_feature_snapshot(
@@ -95,7 +119,7 @@ def _validate_feature_snapshot(
     if feature_snapshot.decision_date != snapshot.decision_date:
         raise ValueError(f"FEATURE_DECISION_DATE_MISMATCH:{symbol}")
     for feature in feature_snapshot.values.values():
-        if feature.as_of > snapshot.decision_cutoff:
+        if as_utc(feature.as_of) > as_utc(snapshot.decision_cutoff):
             raise ValueError(f"POINT_IN_TIME_VIOLATION:{symbol}:{feature.feature_code}")
         if feature.source_snapshot_hash != snapshot.content_hash:
             raise ValueError(f"FEATURE_SOURCE_SNAPSHOT_MISMATCH:{symbol}")
@@ -186,7 +210,7 @@ def _symbol_state(
 def _universe_metrics(
     candidate_symbols: Sequence[str],
     features: Mapping[str, MarketFeatureSnapshot],
-) -> dict[str, Decimal]:
+) -> dict[str, Decimal | None]:
     def values(feature_code: str) -> list[Decimal]:
         return [
             value
@@ -230,6 +254,7 @@ def build_jev_states(
     held_only_symbols: tuple[str, ...],
     candidate_limit: int,
 ) -> tuple[JevUniverseStateV1, Mapping[str, JevSymbolStateV1]]:
+    _validate_snapshot_point_in_time(snapshot)
     if candidate_limit <= 0:
         raise ValueError("CANDIDATE_LIMIT_INVALID")
     if len(set(candidate_symbols)) != len(candidate_symbols):
@@ -278,4 +303,3 @@ def build_jev_states(
         },
     )
     return universe, symbol_states
-

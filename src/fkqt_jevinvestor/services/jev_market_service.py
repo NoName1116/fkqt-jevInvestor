@@ -1,3 +1,4 @@
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import UUID
@@ -74,7 +75,10 @@ class JevMarketEvaluationService:
         universe = await self._evaluate_one(
             run_id=command.run_id,
             command=universe_command,
-            missing_required_data=False,
+            missing_required_data=(
+                universe_state.header.candidate_actual_size == 0
+                or any(value is None for value in universe_state.metrics.values())
+            ),
         )
 
         symbol_results: dict[str, JevEvaluationV1] = {}
@@ -125,33 +129,47 @@ class JevMarketEvaluationService:
             return existing
 
         if missing_required_data:
+            now = datetime.now(UTC)
             failure = self._failure_result(
                 claim=claim,
                 command=command,
                 status=JevEvaluationStatus.DATA_UNAVAILABLE,
                 error_code="REQUIRED_FEATURE_MISSING",
                 response_hash=None,
+                started_at=now,
+                finished_at=now,
+                latency_ms=0,
             )
             return await self._repository.record_failure(claim, failure)
 
+        started_at = datetime.now(UTC)
+        started = time.perf_counter()
         try:
             result = await self._provider.evaluate(command)
         except ProviderUnavailableError:
+            finished_at = datetime.now(UTC)
             failure = self._failure_result(
                 claim=claim,
                 command=command,
                 status=JevEvaluationStatus.PROVIDER_UNAVAILABLE,
                 error_code="PROVIDER_UNAVAILABLE",
                 response_hash=None,
+                started_at=started_at,
+                finished_at=finished_at,
+                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
             )
             return await self._repository.record_failure(claim, failure)
         except ProviderContractError as exc:
+            finished_at = datetime.now(UTC)
             failure = self._failure_result(
                 claim=claim,
                 command=command,
                 status=JevEvaluationStatus.CONTRACT_INVALID,
                 error_code="JEV_RESPONSE_CONTRACT_INVALID",
                 response_hash=exc.response_hash,
+                started_at=started_at,
+                finished_at=finished_at,
+                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
             )
             return await self._repository.record_failure(claim, failure)
         return await self._repository.record_success(claim, result)
@@ -164,8 +182,10 @@ class JevMarketEvaluationService:
         status: JevEvaluationStatus,
         error_code: str,
         response_hash: str | None,
+        started_at: datetime,
+        finished_at: datetime,
+        latency_ms: int,
     ) -> JevEvaluationV1:
-        now = datetime.now(UTC)
         return JevEvaluationV1(
             evaluation_id=claim.evaluation_id,
             formal_key=command.formal_key,
@@ -184,8 +204,8 @@ class JevMarketEvaluationService:
             question_set_version=command.question_set_version,
             input_hash=command.input_hash,
             raw_response_hash=response_hash,
-            started_at=now,
-            finished_at=now,
-            latency_ms=0,
+            started_at=started_at,
+            finished_at=finished_at,
+            latency_ms=latency_ms,
             error_code=error_code,
         )

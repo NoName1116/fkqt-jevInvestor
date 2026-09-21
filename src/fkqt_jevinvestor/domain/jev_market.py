@@ -9,6 +9,106 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
 
 _PROBABILITY_TOLERANCE = Decimal("0.000001")
+JEV_UNIVERSE_METRIC_FIELDS = frozenset(
+    {
+        "median_return_5d",
+        "median_return_20d",
+        "median_close_vs_ma20",
+        "median_ma20_slope_5d",
+        "advance_ratio",
+        "above_ma20_ratio",
+        "positive_return_20d_ratio",
+        "median_realized_vol_20d",
+        "cross_section_return_dispersion",
+        "downside_breadth_ratio",
+        "median_amount_ratio_5d_20d",
+        "liquid_symbol_ratio",
+    }
+)
+JEV_UNIVERSE_COVERAGE_FIELDS = frozenset(
+    {"eligible_symbol_count", "missing_symbol_count", "coverage_ratio", "missing_reasons"}
+)
+JEV_SYMBOL_SECURITY_FIELDS = frozenset(
+    {
+        "market",
+        "board",
+        "listing_age_trading_days",
+        "trading_status",
+        "is_st_or_delisting_risk",
+        "is_initial_no_limit_period",
+        "corporate_action_status",
+        "adjustment_mode",
+        "available_feature_count",
+        "required_feature_count",
+    }
+)
+JEV_SYMBOL_FEATURE_FIELDS = frozenset(
+    {
+        "return_5d",
+        "return_20d",
+        "return_60d",
+        "close_vs_ma5",
+        "close_vs_ma20",
+        "close_vs_ma60",
+        "ma5_slope_5d",
+        "ma20_slope_5d",
+        "realized_vol_20d",
+        "atr_pct_14d",
+        "downside_vol_20d",
+        "distance_from_20d_high",
+        "distance_from_20d_low",
+        "short_term_reversal_3d",
+        "volume_ratio_5d_20d",
+        "amount_ratio_5d_20d",
+        "turnover_pct",
+        "liquidity_percentile",
+        "return_20d_percentile",
+        "volatility_percentile",
+    }
+)
+
+_EVALUATION_QUESTION_CONTRACTS = {
+    "UNIVERSE": (
+        (
+            "universe_risk_regime",
+            "universe-risk-regime-v1",
+            "universe-risk-criteria-v1",
+            ("RISK_ON", "NEUTRAL", "RISK_OFF"),
+        ),
+    ),
+    "SYMBOL": (
+        (
+            "next_session_pnl",
+            "next-session-pnl-v1",
+            "pnl-label-criteria-v1",
+            ("PROFIT", "FLAT", "LOSS"),
+        ),
+        (
+            "profitability_5d",
+            "profitability-5d-v1",
+            "pnl-label-criteria-v1",
+            ("PROFITABLE", "FLAT", "LOSS"),
+        ),
+        (
+            "drawdown_risk_5d",
+            "drawdown-risk-5d-v1",
+            "pnl-label-criteria-v1",
+            ("LOW", "MEDIUM", "HIGH"),
+        ),
+        (
+            "payoff_asymmetry_5d",
+            "payoff-asymmetry-5d-v1",
+            "pnl-label-criteria-v1",
+            ("UPSIDE_DOMINANT", "BALANCED", "DOWNSIDE_DOMINANT"),
+        ),
+        (
+            "data_sufficiency",
+            "data-sufficiency-v1",
+            "data-sufficiency-criteria-v1",
+            ("SUFFICIENT", "LIMITED", "INSUFFICIENT"),
+        ),
+    ),
+}
 
 
 class JevScope(StrEnum):
@@ -25,7 +125,7 @@ class JevEvaluationStatus(StrEnum):
 
 
 class JevStateHeaderV1(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision_date: date
     decision_cutoff: datetime
@@ -47,21 +147,37 @@ class JevStateHeaderV1(BaseModel):
 
 
 class JevUniverseStateV1(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     header: JevStateHeaderV1
-    metrics: Mapping[str, Decimal]
-    coverage: Mapping[str, int | Decimal | tuple[str, ...]]
+    metrics: Mapping[str, Decimal | None]
+    coverage: Mapping[str, int | Decimal | tuple[str, ...] | None]
+
+    @model_validator(mode="after")
+    def validate_field_whitelists(self) -> Self:
+        if not set(self.metrics) <= JEV_UNIVERSE_METRIC_FIELDS or not set(
+            self.coverage
+        ) <= JEV_UNIVERSE_COVERAGE_FIELDS:
+            raise ValueError("JEV_STATE_FIELD_FORBIDDEN")
+        return self
 
 
 class JevSymbolStateV1(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     header: JevStateHeaderV1
     symbol: str = Field(min_length=1)
     security: Mapping[str, str | bool | int | None]
     features: Mapping[str, Decimal]
     missing_reasons: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_field_whitelists(self) -> Self:
+        if not set(self.security) <= JEV_SYMBOL_SECURITY_FIELDS or not set(
+            self.features
+        ) <= JEV_SYMBOL_FEATURE_FIELDS:
+            raise ValueError("JEV_STATE_FIELD_FORBIDDEN")
+        return self
 
 
 class JevQuestionResultV1(BaseModel):
@@ -184,4 +300,16 @@ class JevEvaluationV1(BaseModel):
         question_ids = tuple(item.question_id for item in self.results)
         if len(set(question_ids)) != len(question_ids):
             raise ValueError("JEV_DUPLICATE_QUESTION_RESULT")
+        if self.status is JevEvaluationStatus.AVAILABLE:
+            expected = _EVALUATION_QUESTION_CONTRACTS[self.scope.value]
+            if question_ids != tuple(item[0] for item in expected):
+                raise ValueError("JEV_RESULT_QUESTION_SET_INVALID")
+            for result, contract in zip(self.results, expected, strict=True):
+                _, question_version, criteria_version, label_order = contract
+                if (
+                    result.question_version != question_version
+                    or result.criteria_version != criteria_version
+                    or result.label_order != label_order
+                ):
+                    raise ValueError("JEV_RESULT_QUESTION_CONTRACT_INVALID")
         return self

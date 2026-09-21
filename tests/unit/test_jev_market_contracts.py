@@ -47,6 +47,52 @@ def _result(**updates: object) -> JevQuestionResultV1:
     return JevQuestionResultV1.model_validate(values)
 
 
+def _symbol_results() -> tuple[JevQuestionResultV1, ...]:
+    contracts = (
+        (
+            "next_session_pnl",
+            "next-session-pnl-v1",
+            "pnl-label-criteria-v1",
+            ("PROFIT", "FLAT", "LOSS"),
+        ),
+        (
+            "profitability_5d",
+            "profitability-5d-v1",
+            "pnl-label-criteria-v1",
+            ("PROFITABLE", "FLAT", "LOSS"),
+        ),
+        (
+            "drawdown_risk_5d",
+            "drawdown-risk-5d-v1",
+            "pnl-label-criteria-v1",
+            ("LOW", "MEDIUM", "HIGH"),
+        ),
+        (
+            "payoff_asymmetry_5d",
+            "payoff-asymmetry-5d-v1",
+            "pnl-label-criteria-v1",
+            ("UPSIDE_DOMINANT", "BALANCED", "DOWNSIDE_DOMINANT"),
+        ),
+        (
+            "data_sufficiency",
+            "data-sufficiency-v1",
+            "data-sufficiency-criteria-v1",
+            ("SUFFICIENT", "LIMITED", "INSUFFICIENT"),
+        ),
+    )
+    return tuple(
+        JevQuestionResultV1(
+            question_id=question_id,
+            question_version=question_version,
+            criteria_version=criteria_version,
+            label_order=label_order,
+            distribution={label_order[0]: Decimal(1), label_order[1]: Decimal(0), label_order[2]: Decimal(0)},
+            selected_label=label_order[0],
+        )
+        for question_id, question_version, criteria_version, label_order in contracts
+    )
+
+
 def _evaluation(**updates: object) -> JevEvaluationV1:
     now = datetime(2026, 9, 18, 15, 0, 1, tzinfo=UTC)
     values: dict[str, object] = {
@@ -55,7 +101,7 @@ def _evaluation(**updates: object) -> JevEvaluationV1:
         "scope": JevScope.SYMBOL,
         "symbol": "600000.SH",
         "status": JevEvaluationStatus.AVAILABLE,
-        "results": (_result(),),
+        "results": _symbol_results(),
         "provider_name": "typesafe",
         "provider_version": "typesafe-sdk-0.7",
         "model_id": "jev-latest",
@@ -142,7 +188,7 @@ def test_available_evaluation_requires_results_and_no_error() -> None:
 
 def test_failed_evaluation_forbids_results_and_requires_error() -> None:
     with pytest.raises(ValueError, match="JEV_FAILED_RESULT_FORBIDDEN"):
-        _evaluation(status=JevEvaluationStatus.CONTRACT_INVALID, error_code="BAD", results=(_result(),))
+        _evaluation(status=JevEvaluationStatus.CONTRACT_INVALID, error_code="BAD")
     with pytest.raises(ValueError, match="JEV_FAILED_ERROR_REQUIRED"):
         _evaluation(status=JevEvaluationStatus.PROVIDER_UNAVAILABLE, results=(), error_code=None)
 
@@ -192,3 +238,35 @@ def test_state_scope_must_match_command_scope() -> None:
             provider_version="typesafe-sdk-0.7",
             model_id="jev-latest",
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "payload"),
+    [
+        ("features", {"future_label": Decimal(1)}),
+        ("security", {"cash": "1000000"}),
+    ],
+)
+def test_symbol_state_rejects_non_whitelisted_fields(
+    field: str,
+    payload: dict[str, Decimal | str],
+) -> None:
+    values: dict[str, object] = {
+        "header": _header(),
+        "symbol": "600000.SH",
+        "security": {"market": "SSE"},
+        "features": {"return_5d": Decimal("0.01")},
+        "missing_reasons": (),
+    }
+    values[field] = payload
+    with pytest.raises(ValueError, match="JEV_STATE_FIELD_FORBIDDEN"):
+        JevSymbolStateV1.model_validate(values)
+
+
+def test_available_symbol_evaluation_requires_complete_frozen_question_set() -> None:
+    with pytest.raises(ValueError, match="JEV_RESULT_QUESTION_SET_INVALID"):
+        _evaluation(results=(_symbol_results()[0],))
+
+    wrong_version = _symbol_results()[0].model_copy(update={"question_version": "v2"})
+    with pytest.raises(ValueError, match="JEV_RESULT_QUESTION_CONTRACT_INVALID"):
+        _evaluation(results=(wrong_version, *_symbol_results()[1:]))

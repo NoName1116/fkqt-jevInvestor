@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from typesafe_sdk import Answer, ChoiceAnswer, SystemOneResponse, Usage
 
 from fkqt_jevinvestor.domain.jev_market import (
     JevEvaluationCommand,
@@ -214,3 +215,52 @@ def test_provider_contract_error_remains_backward_compatible() -> None:
     assert str(legacy) == "legacy message"
     assert legacy.response_hash is None
 
+
+@pytest.mark.asyncio
+async def test_provider_accepts_locked_sdk_response_models() -> None:
+    answers: dict[str, Answer] = {}
+    for definition in QUESTION_DEFINITIONS.values():
+        if definition.scope is not JevScope.SYMBOL:
+            continue
+        probabilities = {label: 0.0 for label in definition.label_order}
+        probabilities[definition.label_order[0]] = 1.0
+        answers[definition.question_id] = ChoiceAnswer(
+            choice=definition.label_order[0],
+            confidence=1.0,
+            probabilities=probabilities,
+        )
+    response = SystemOneResponse(
+        model="jev-market-test",
+        usage=Usage(input_tokens=10, output_tokens=5),
+        answers=answers,
+    )
+    provider = TypeSafeJevMarketProvider(
+        client=FakeClient(response),
+        model="jev-market-test",
+        provider_version="typesafe-sdk-test",
+    )
+
+    result = await provider.evaluate(_command())
+
+    assert result.status == JevEvaluationStatus.AVAILABLE
+    assert len(result.results) == 5
+
+
+@pytest.mark.asyncio
+async def test_provider_revalidates_state_before_external_call() -> None:
+    command = _command()
+    invalid_state = command.state.model_copy(
+        update={"features": {"future_label": Decimal(1)}}
+    )
+    command = command.model_copy(update={"state": invalid_state})
+    client = FakeClient(_valid_response())
+    provider = TypeSafeJevMarketProvider(
+        client=client,
+        model="jev-market-test",
+        provider_version="typesafe-sdk-test",
+    )
+
+    with pytest.raises(ProviderContractError, match="JEV_STATE_CONTRACT_INVALID"):
+        await provider.evaluate(command)
+
+    assert client.calls == []

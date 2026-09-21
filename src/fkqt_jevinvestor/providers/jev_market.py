@@ -94,6 +94,10 @@ class TypeSafeJevMarketProvider:
         )
 
     async def evaluate(self, command: JevEvaluationCommand) -> JevEvaluationV1:
+        try:
+            command = JevEvaluationCommand.model_validate(command.model_dump())
+        except ValidationError as exc:
+            raise ProviderContractError("JEV_STATE_CONTRACT_INVALID") from exc
         self._validate_command_config(command)
         started_at = datetime.now(UTC)
         started = time.perf_counter()
