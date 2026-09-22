@@ -107,7 +107,7 @@ class BacktestExecutionResult(BaseModel):
     decision_date: date
     execution_date: date
     portfolio_after: PortfolioState
-    total_equity: Decimal = Field(gt=0)
+    total_equity: Decimal = Field(ge=0)
     cash_balance: Decimal = Field(ge=0)
     market_value: Decimal = Field(ge=0)
     gross_traded_value: Decimal = Field(ge=0)

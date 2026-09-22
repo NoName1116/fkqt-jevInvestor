@@ -3,6 +3,7 @@ from typing import get_type_hints
 
 from fkqt_jevinvestor.domain.backtest import (
     BacktestConfig,
+    BacktestExecutionResult,
     DecisionReplayDay,
     ExecutionPort,
     ReplayDataProvider,
@@ -27,6 +28,10 @@ def test_replay_provider_exposes_explicit_warmup_dates() -> None:
     assert hints["before"] is date
     assert hints["count"] is int
     assert hints["return"] == tuple[date, ...]
+
+
+def test_execution_result_allows_zero_equity_for_stable_engine_error() -> None:
+    assert BacktestExecutionResult.model_fields["total_equity"].metadata[0].ge == 0
 
 
 def test_target_provider_decision_view_cannot_access_d_plus_one_market() -> None:
