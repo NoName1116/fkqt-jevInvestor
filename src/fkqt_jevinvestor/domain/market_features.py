@@ -45,6 +45,20 @@ class SecurityTradeState(BaseModel):
     missing_reasons: tuple[str, ...] = ()
 
 
+class MarketSourceAudit(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    upstream_type: str
+    upstream_version: str
+    request_scope: Mapping[str, object]
+    data_cutoff: datetime
+    schema_version: str
+    fetched_at: datetime
+    record_count: int = Field(ge=0)
+    raw_snapshot_ref: str
+    content_hash: str = Field(min_length=64, max_length=64)
+
+
 class MarketSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -52,10 +66,13 @@ class MarketSnapshot(BaseModel):
     decision_date: date
     decision_cutoff: datetime
     next_trade_date: date
+    calendar_complete_through: date
+    universe_snapshot_id: str
     universe_snapshot_hash: str = Field(min_length=64, max_length=64)
     daily_bars: Mapping[str, tuple[DailyBar, ...]]
     security_states: Mapping[str, SecurityTradeState]
     source_manifest_ids: tuple[str, ...]
+    source_audits: tuple[MarketSourceAudit, ...]
     content_hash: str = Field(min_length=64, max_length=64)
 
 

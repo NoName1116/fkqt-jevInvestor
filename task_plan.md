@@ -25,7 +25,9 @@
 | P17 | 冻结回测 Contributor 契约 | 用户指定沙耶负责回测 | Entity、Protocol、文件所有权和验收规范 | 已完成 |
 | P18 | 用户审阅实施计划并选择执行方式 | 两份实施计划 | 批准或修改意见 | 已完成 |
 | P19 | 创建公开 GitHub 仓库并迁移 | 批准后的迁移计划 | 独立仓库与 Phase 0/1 等价基线 | 已完成 |
-| P20 | 冻结 `backtest-contract-v1` | Phase 2 Task 1 | 沙耶可并行开发的稳定标签 | 待开始 |
+| P20 | 冻结 `backtest-contract-v1` | Phase 2 Task 1 | 契约提交与 PR 已完成；标签待非作者 Review 和合并后发布 | 进行中 |
+| P21 | 实施 Phase 2 行情快照与确定性特征 | Tasks 2–8 | Adapter、不可变存储、特征、横截面、持久化、API、CLI | 已完成 |
+| P22 | Phase 2 最终验收与运行手册 | Task 9 | 全量静态检查、离线测试、迁移状态和运行手册 | 已完成 |
 
 ## Phase 0 验收记录
 
@@ -54,7 +56,7 @@
 
 ## 当前停止点
 
-Phase 0/1 已等价迁移到 `C:\Users\1\Desktop\FKQTPRO\fkqt-jevInvestor`。迁移验收结果为 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 79 passed/1 deselected，Alembic 往返后为 `0003_phase1_audit_snapshot (head)`。下一步完成 Phase 2 Task 1 并推送 `backtest-contract-v1` 标签后，沙耶可通过 Fork + Pull Request 开始回测开发。
+Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收得到 Ruff 0 错误、Pyright 0 errors/0 warnings、Pytest 100 passed/2 failed/1 deselected；两个旧迁移测试修正后单独得到 2 passed。审查修复覆盖防前视、UTC 往返、特征哈希、缺行情覆盖、Windows 时区、遗漏特征、冻结候选池、来源审计、日历完整性、回测决策视图和 Decimal context；直接相关测试 35 项通过。数据库目标 Revision 更新为 `0005_phase2_audit_hardening (head)`。下一步是推送修复、更新 Contract PR，获得非作者 Review 并合并，随后发布不可移动的 `backtest-contract-v1` 标签。
 # Phase 1 Task 8 最终状态（2026-09-21）
 
 - 状态：完成。

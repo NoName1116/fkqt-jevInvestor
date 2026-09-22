@@ -117,3 +117,23 @@
 - Pytest：`79 passed, 1 deselected, 2 warnings`；live 测试未运行。
 - Alembic：`upgrade head → downgrade base → upgrade head` 完成，最终为 `0003_phase1_audit_snapshot (head)`。
 - 两日 Fixture：现金 `795834.7700`，总资产 `999834.7700`，卖出佣金 `1.2000`，印花税 `2.0000`，买入佣金 `60.0300`，持仓数量 `400/20000`，重复成交 `0`。
+
+## Phase 2 行情快照与确定性特征（2026-09-21）
+
+1. FKQT 已被隔离为外部数据上游；正式链路只通过不可变 Manifest bundle 或版本化 REST 响应读取数据。
+2. Manifest Adapter 验证六类数据的版本、日期、内容哈希、物理 Schema 哈希、行数和路径边界；新增的 `candidate_universe` 是候选池成员和版本的权威来源。读取分区目录单文件时必须设置 `partitioning=None`，避免 PyArrow 自动注入 Hive 分区列。
+3. REST Adapter 使用启动层配置的 `httpx.AsyncClient`，业务模块不保存 Base URL、认证凭据或 Client 生命周期。
+4. 行情快照保存为 `<snapshot-root>/<decision-date>/<content-hash>.json`；数据库只保存引用、审计元数据和逐项版本化特征。
+5. 单票行情特征全部使用 Decimal，并统一量化到 8 位；复权模式混合时价格特征稳定缺失为 `ADJUSTMENT_MODE_MISMATCH`。
+6. 横截面百分位采用平均秩，单个有效值为 `0.50000000`，无有效值为 `CROSS_SECTION_EMPTY`，输入顺序不影响结果。
+7. Pipeline 固定执行 Provider 获取、全量 Point-in-Time 校验、文件冻结、单票特征、横截面和数据库事务保存；未来 bar 会在数据库写入前拒绝整批。
+8. CLI 命令为 `market freeze --date YYYY-MM-DD --symbols A,B --source manifest`；bundle 和快照根目录只从环境配置读取，不接受请求传入任意路径。
+9. HTTP 提供 freeze、快照引用查询和特征查询；production 请求 Schema 禁止额外本地路径字段。未注入 Provider 时 freeze 返回 `MARKET_PROVIDER_UNAVAILABLE`，历史查询不受影响。
+10. 严格类型检查使用 `pyarrow-stubs==20.0.0.20260819`；未来升级 PyArrow 时需要同步复核类型桩。
+11. Phase 2 完整验收首次运行：Ruff `All checks passed!`，Pyright `0 errors, 0 warnings`，Pytest `100 passed, 2 failed, 1 deselected`。两个失败来自旧测试把 Alembic `head` 写死为 `0003` 和 11 张表；Phase 2 当前正确值是 `0004` 和 13 张表。修正后按测试节制要求只重跑两个失败项，结果 `2 passed`。
+12. 初次验收时 Alembic 为 `0004_phase2_market_features`；审查修复新增独立 Revision `0005_phase2_audit_hardening`，不改写已推送迁移历史。
+13. 非阻断警告共 2 条：Starlette TestClient 使用 AnyIO 旧别名；FastAPI 的 `HTTP_422_UNPROCESSABLE_ENTITY` 常量已弃用。两者均来自第三方调用链。
+14. 初次验收时 Contract 文件相对提交 `057e0c6` 无漂移；独立审查随后发现 `ReplayDay` 会把 D+1 执行行情暴露给 `TargetProvider`。标签尚未发布，因此已在候选 v1 内新增 `DecisionReplayDay` 并同步 Contributor 契约，修复提交合并后才能发布标签。
+15. 独立整分支审查发现 1 个 Critical、10 个 Important 和 2 个 Minor。Critical/Important 已进入一次集中修复：日频 cutoff 必须达到中国市场 15:00 且带时区；数据库统一写入 UTC；原特征快照哈希持久化；缺行情和陈旧行情输出稳定缺失；补齐 4 个设计特征；固定 Decimal precision/rounding；Manifest 强制冻结候选池和来源审计；交易日历必须逐日完整；TargetProvider 无法访问 D+1 行情。
+16. 审查修复直接相关测试分三组运行：单元 15 passed、Adapter Contract 10 passed、Phase 2 集成 10 passed；Ruff 全量通过，Pyright 0 errors/0 warnings。
+17. 两个 Minor 延后：Pydantic frozen 模型内部 Mapping 仍可变；快照文件尚未采用临时文件加原子发布。两项不会绕过当前哈希校验，但应在下一次存储加固任务处理。
