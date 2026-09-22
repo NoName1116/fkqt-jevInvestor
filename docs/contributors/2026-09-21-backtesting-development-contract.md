@@ -125,7 +125,7 @@ class TargetPositionBatch(BaseModel):
     input_hash: str = Field(min_length=64, max_length=64)
 
 
-class ReplayDay(BaseModel):
+class DecisionReplayDay(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     decision_date: date
@@ -135,7 +135,15 @@ class ReplayDay(BaseModel):
     market_snapshot_hash: str = Field(min_length=64, max_length=64)
     feature_snapshot_hash: str = Field(min_length=64, max_length=64)
     features: Mapping[str, MarketFeatureSnapshot]
+
+
+class ReplayDay(DecisionReplayDay):
     execution_market: Mapping[str, MarketExecutionSnapshot]
+
+    def decision_view(self) -> DecisionReplayDay:
+        return DecisionReplayDay.model_validate(
+            self.model_dump(exclude={"execution_market"})
+        )
 
 
 class BacktestConfig(BaseModel):
@@ -178,7 +186,7 @@ class BacktestExecutionResult(BaseModel):
     decision_date: date
     execution_date: date
     portfolio_after: PortfolioState
-    total_equity: Decimal = Field(gt=0)
+    total_equity: Decimal = Field(ge=0)
     cash_balance: Decimal = Field(ge=0)
     market_value: Decimal = Field(ge=0)
     gross_traded_value: Decimal = Field(ge=0)
@@ -218,6 +226,8 @@ class BacktestResult(BaseModel):
 
 
 class ReplayDataProvider(Protocol):
+    async def warmup_dates(self, before: date, count: int) -> tuple[date, ...]: ...
+
     async def decision_dates(self, start: date, end: date) -> tuple[date, ...]: ...
 
     async def load_day(self, decision_date: date) -> ReplayDay: ...
@@ -227,7 +237,7 @@ class TargetProvider(Protocol):
     async def build_targets(
         self,
         config: BacktestConfig,
-        day: ReplayDay,
+        day: DecisionReplayDay,
         portfolio: PortfolioState,
     ) -> TargetPositionBatch: ...
 
@@ -249,17 +259,27 @@ class ExecutionPort(Protocol):
 
 1. 校验 `start_date <= end_date`。
 2. 从 `ReplayDataProvider` 取得按升序排列且无重复的决策日。
-3. 加载预热期数据，但预热期不得产生订单、收益或指标记录。
+3. 调用 `warmup_dates(config.start_date, config.warmup_trading_days)` 取得预热日并加载预热数据，但预热期不得产生订单、收益或指标记录。
 4. 对每个正式决策日读取一个 `ReplayDay`。
 5. 校验 `decision_date < planned_execution_date`。
 6. 校验 `decision_cutoff.date() == decision_date`。
 7. 校验所有特征 `as_of <= decision_cutoff`。
-8. 调用一次 `TargetProvider.build_targets()`。
+8. 调用 `ReplayDay.decision_view()`，把不含 D+1 `execution_market` 的 `DecisionReplayDay` 传给一次 `TargetProvider.build_targets()`。
 9. 校验目标批次日期、实验组和 `sizing_version` 与配置一致。
 10. 调用一次 `ExecutionPort.execute()`，只传入 D+1 `execution_market`。
 11. 使用实际成交后组合状态生成 `DailyBacktestRecord`。
 12. 全部交易日结束后计算 `BacktestSummary`。
 13. 使用 canonical JSON 计算 `config_hash` 和 `result_hash`。
+
+`warmup_dates(before, count)` 的 `before` 是不包含上界。返回值必须按日期严格升序、无重复，每个日期都必须小于 `before`；`count == 0` 时返回空元组。可用预热交易日少于 `count` 时整次回测失败，不缩短预热期。
+
+`decision_dates(start, end)` 只返回闭区间 `[start, end]` 内的正式决策日，不包含预热日。预热日只用于验证数据集在正式窗口前的交易日覆盖、Point-in-Time 和快照连续性；本引擎不在预热期内重算上游已冻结的滚动特征。预热日必须调用 `load_day()`，但不得调用 `TargetProvider` 或 `ExecutionPort`。
+
+`config_hash` 是 `BacktestConfig.model_dump(mode="json")` 的 canonical JSON 的 SHA-256，覆盖配置的全部字段。`result_hash` 是完整 `BacktestResult` 的 canonical JSON 的 SHA-256，但计算前必须从 `summary` 中排除 `result_hash` 字段；`config_hash` 保留在该预映像中。禁止使用空串、零哈希或临时随机值填充自引用字段后再计算。
+
+`ReplayDay.features` 和 `ReplayDay.execution_market` 的键都是证券代码。第 7 步必须遍历每个 `MarketFeatureSnapshot.values` 中的全部 `FeatureValue`，逐个校验 `as_of <= decision_cutoff`。
+
+`TargetPositionBatch.targets` 必须按证券代码唯一覆盖 `day.features` 中的全部证券和 `portfolio.positions` 中的全部持仓证券，不得包含该并集之外的证券。不采取交易动作的证券也必须用 `KEEP`、`AVOID` 或 `NO_SIGNAL` 显式表达；缺失目标不得被解释为维持现状或目标为零。
 
 遇到日期不连续、未来特征、目标批次错组或错日时整次回测失败，不跳过错误日期继续。
 
@@ -289,11 +309,16 @@ class BacktestEngine:
 INVALID_BACKTEST_WINDOW
 DECISION_DATES_NOT_STRICTLY_ORDERED
 REPLAY_DAY_DATE_MISMATCH
+EXECUTION_DATE_NOT_AFTER_DECISION_DATE
+DECISION_CUTOFF_DATE_MISMATCH
 POINT_IN_TIME_VIOLATION
 TARGET_DATE_MISMATCH
 TARGET_EXPERIMENT_ARM_MISMATCH
 TARGET_SIZING_VERSION_MISMATCH
 EMPTY_BACKTEST_WINDOW
+INSUFFICIENT_WARMUP_DATA
+TARGET_SYMBOL_COVERAGE_MISMATCH
+PORTFOLIO_EQUITY_DEPLETED
 ```
 
 `src/fkqt_jevinvestor/backtest/metrics.py`：
@@ -301,6 +326,8 @@ EMPTY_BACKTEST_WINDOW
 ```python
 def build_daily_record(
     previous_equity: Decimal,
+    initial_cash: Decimal,
+    running_peak_equity: Decimal,
     execution: BacktestExecutionResult,
 ) -> DailyBacktestRecord: ...
 
@@ -342,10 +369,16 @@ JSON 必须 UTF-8、`ensure_ascii=False`、键排序、Decimal 序列化为字�
 | `annualized_return` | `(1 + cumulative_return) ** (252 / trading_days) - 1` |
 | `drawdown` | `total_equity_t / running_peak_equity - 1` |
 | `max_drawdown` | 全部 `drawdown` 的最小值绝对值，非负数 |
-| `turnover` | 当日成交绝对金额之和 / 当日成交前总资产 |
+| `turnover` | `gross_traded_value / previous_equity` |
 | `sharpe_ratio` | `mean(daily_return) / sample_std(daily_return) * sqrt(252)` |
 | `sortino_ratio` | `mean(daily_return) / sample_std(negative_daily_return) * sqrt(252)` |
 | `fill_rate` | `filled_orders / submitted_orders` |
+
+`build_daily_record()` 使用 `initial_cash` 计算 `cumulative_return`，并使用 `max(running_peak_equity, execution.total_equity)` 作为当日运行峰值计算 `drawdown`。`running_peak_equity` 由引擎在交易日之间显式传递，指标函数不依赖模块全局变量或隐式可变状态。
+
+引擎的初始组合必须由 `BacktestConfig` 确定性构造：`portfolio_id=config.run_id`、`cash_balance=config.initial_cash`、`frozen_cash=Decimal("0")`、`realized_pnl=Decimal("0")`、`positions=()`、`version=1`。
+
+`BacktestExecutionResult.total_equity == 0` 时，引擎必须以 `PORTFOLIO_EQUITY_DEPLETED` 终止整次回测，不得进入下一个交易日导致除零，不得将归零权益静默改为正数。
 
 少于 2 个收益样本、标准差为零或下行样本不足 2 个时，对应风险比率返回 `None`，不得返回无穷大。所有最终数值量化为 8 位小数；金额沿用执行域的 4 位小数。
 
@@ -373,6 +406,7 @@ JSON 必须 UTF-8、`ensure_ascii=False`、键排序、Decimal 序列化为字�
 |---|---|---|
 | 两交易日正常回测 | D1、D2 冻结数据 | 2 条逐日记录，资产恒等式成立 |
 | 预热期 | 60 天预热 + 2 天正式窗口 | 只生成 2 条记录和 2 次 Target 调用 |
+| 决策视图隔离 | 捕获传入 TargetProvider 的实际对象 | 对象不存在 `execution_market` 属性 |
 | 周末与节假日 | 周五决策、下周有效交易日执行 | 使用 Provider 给出的 D+1，不用自然日加一 |
 | 未来特征 | `feature.as_of > decision_cutoff` | `POINT_IN_TIME_VIOLATION` |
 | 错日目标 | Target 批次日期与 ReplayDay 不同 | `TARGET_DATE_MISMATCH` |
@@ -445,4 +479,5 @@ PR 描述必须列出：
 - 回测引擎不负责生成 A/B/C/D 的真实 Target；核心项目在 Phase 3/4 提供相应 `TargetProvider`。
 - 初期可以使用 Fake TargetProvider 完成全部引擎开发。
 - Phase 2 文件 Adapter 合并后，核心负责人负责增加真实冻结快照的集成测试。
+- 基于冻结快照的 `ReplayDataProvider` Adapter、把 `TargetPositionBatch` 转换为已有虚拟执行域输入的版本化映射，以及生产 `ExecutionPort` Adapter 由核心项目负责，不属于沙耶的回测引擎 PR。
 - 第一版不实现并行进程、分布式回测、参数网格搜索、GPU、分钟级撮合和真实券商回放。
