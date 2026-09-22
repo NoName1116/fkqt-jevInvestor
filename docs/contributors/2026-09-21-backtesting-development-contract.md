@@ -226,6 +226,8 @@ class BacktestResult(BaseModel):
 
 
 class ReplayDataProvider(Protocol):
+    async def warmup_dates(self, before: date, count: int) -> tuple[date, ...]: ...
+
     async def decision_dates(self, start: date, end: date) -> tuple[date, ...]: ...
 
     async def load_day(self, decision_date: date) -> ReplayDay: ...
@@ -257,7 +259,7 @@ class ExecutionPort(Protocol):
 
 1. 校验 `start_date <= end_date`。
 2. 从 `ReplayDataProvider` 取得按升序排列且无重复的决策日。
-3. 加载预热期数据，但预热期不得产生订单、收益或指标记录。
+3. 调用 `warmup_dates(config.start_date, config.warmup_trading_days)` 取得预热日并加载预热数据，但预热期不得产生订单、收益或指标记录。
 4. 对每个正式决策日读取一个 `ReplayDay`。
 5. 校验 `decision_date < planned_execution_date`。
 6. 校验 `decision_cutoff.date() == decision_date`。
@@ -268,6 +270,10 @@ class ExecutionPort(Protocol):
 11. 使用实际成交后组合状态生成 `DailyBacktestRecord`。
 12. 全部交易日结束后计算 `BacktestSummary`。
 13. 使用 canonical JSON 计算 `config_hash` 和 `result_hash`。
+
+`warmup_dates(before, count)` 的 `before` 是不包含上界。返回值必须按日期严格升序、无重复，每个日期都必须小于 `before`；`count == 0` 时返回空元组。可用预热交易日少于 `count` 时整次回测失败，不缩短预热期。
+
+`config_hash` 是 `BacktestConfig.model_dump(mode="json")` 的 canonical JSON 的 SHA-256，覆盖配置的全部字段。`result_hash` 是完整 `BacktestResult` 的 canonical JSON 的 SHA-256，但计算前必须从 `summary` 中排除 `result_hash` 字段；`config_hash` 保留在该预映像中。禁止使用空串、零哈希或临时随机值填充自引用字段后再计算。
 
 遇到日期不连续、未来特征、目标批次错组或错日时整次回测失败，不跳过错误日期继续。
 
@@ -297,11 +303,14 @@ class BacktestEngine:
 INVALID_BACKTEST_WINDOW
 DECISION_DATES_NOT_STRICTLY_ORDERED
 REPLAY_DAY_DATE_MISMATCH
+EXECUTION_DATE_NOT_AFTER_DECISION_DATE
+DECISION_CUTOFF_DATE_MISMATCH
 POINT_IN_TIME_VIOLATION
 TARGET_DATE_MISMATCH
 TARGET_EXPERIMENT_ARM_MISMATCH
 TARGET_SIZING_VERSION_MISMATCH
 EMPTY_BACKTEST_WINDOW
+INSUFFICIENT_WARMUP_DATA
 ```
 
 `src/fkqt_jevinvestor/backtest/metrics.py`：
@@ -310,6 +319,9 @@ EMPTY_BACKTEST_WINDOW
 def build_daily_record(
     previous_equity: Decimal,
     execution: BacktestExecutionResult,
+    *,
+    initial_cash: Decimal,
+    running_peak_equity: Decimal,
 ) -> DailyBacktestRecord: ...
 
 
@@ -354,6 +366,10 @@ JSON 必须 UTF-8、`ensure_ascii=False`、键排序、Decimal 序列化为字�
 | `sharpe_ratio` | `mean(daily_return) / sample_std(daily_return) * sqrt(252)` |
 | `sortino_ratio` | `mean(daily_return) / sample_std(negative_daily_return) * sqrt(252)` |
 | `fill_rate` | `filled_orders / submitted_orders` |
+
+`build_daily_record()` 使用 `initial_cash` 计算 `cumulative_return`，并使用 `max(running_peak_equity, execution.total_equity)` 作为当日运行峰值计算 `drawdown`。`running_peak_equity` 由引擎在交易日之间显式传递，指标函数不依赖模块全局变量或隐式可变状态。
+
+引擎的初始组合必须由 `BacktestConfig` 确定性构造：`portfolio_id=config.run_id`、`cash_balance=config.initial_cash`、`frozen_cash=Decimal("0")`、`realized_pnl=Decimal("0")`、`positions=()`、`version=1`。
 
 少于 2 个收益样本、标准差为零或下行样本不足 2 个时，对应风险比率返回 `None`，不得返回无穷大。所有最终数值量化为 8 位小数；金额沿用执行域的 4 位小数。
 

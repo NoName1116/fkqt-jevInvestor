@@ -21,6 +21,14 @@ def test_backtest_contract_v1_public_names_are_importable() -> None:
     assert ExecutionPort
 
 
+def test_replay_provider_exposes_explicit_warmup_dates() -> None:
+    hints = get_type_hints(ReplayDataProvider.warmup_dates)
+
+    assert hints["before"] is date
+    assert hints["count"] is int
+    assert hints["return"] == tuple[date, ...]
+
+
 def test_target_provider_decision_view_cannot_access_d_plus_one_market() -> None:
     replay = ReplayDay(
         decision_date=date(2026, 9, 18),
