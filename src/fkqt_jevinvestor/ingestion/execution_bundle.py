@@ -16,6 +16,10 @@ class ExecutionBundleV1(BaseModel):
     trade_date: date
     snapshots: Mapping[str, MarketExecutionSnapshot]
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_manifest_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", exclude=True)
+    source_manifest_content_hash: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$", exclude=True
+    )
 
     @classmethod
     def create(
@@ -87,4 +91,20 @@ class ExecutionBundleStore:
         except FileExistsError:
             if destination.read_text(encoding="utf-8") != serialized:
                 raise ValueError("EXECUTION_BUNDLE_STORE_CONFLICT") from None
+        if bundle.source_manifest_id is not None:
+            if bundle.source_manifest_content_hash is None:
+                raise ValueError("EXECUTION_SOURCE_HASH_REQUIRED")
+            origin = destination.with_suffix(".origin.json")
+            provenance = f"{canonical_json({
+                'execution_hash': bundle.content_hash,
+                'source_type': 'FKQT_TUSHARE_MANIFEST',
+                'source_manifest_id': bundle.source_manifest_id,
+                'source_manifest_content_hash': bundle.source_manifest_content_hash,
+            })}\n"
+            try:
+                with origin.open("x", encoding="utf-8", newline="\n") as handle:
+                    handle.write(provenance)
+            except FileExistsError:
+                if origin.read_text(encoding="utf-8") != provenance:
+                    raise ValueError("EXECUTION_SOURCE_CONFLICT") from None
         return destination

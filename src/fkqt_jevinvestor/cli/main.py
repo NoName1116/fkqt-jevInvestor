@@ -104,6 +104,7 @@ def _prepare_execution(args: argparse.Namespace, settings: Settings) -> int:
         "execution_hash": bundle.content_hash,
         "execution_ref": str(path),
         "symbol_count": len(bundle.snapshots),
+        "source_manifest_id": bundle.source_manifest_id,
     }, ensure_ascii=False, sort_keys=True))
     return 0
 

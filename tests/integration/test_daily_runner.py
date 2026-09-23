@@ -17,6 +17,7 @@ from fkqt_jevinvestor.cli.main import (
     _daily_execute,  # pyright: ignore[reportPrivateUsage]
     _daily_required_symbols,  # pyright: ignore[reportPrivateUsage]
     _daily_status,  # pyright: ignore[reportPrivateUsage]
+    _prepare_execution,  # pyright: ignore[reportPrivateUsage]
 )
 from fkqt_jevinvestor.config import Settings
 from fkqt_jevinvestor.domain.decision import DecisionAction
@@ -34,6 +35,10 @@ from fkqt_jevinvestor.services.portfolio_service import CreatePortfolio
 from fkqt_jevinvestor.services.position_sizing import (
     PositionSizingConfigV1,
     to_validated_signal_batch,
+)
+from tests.contract.test_fkqt_execution_manifest import (
+    _row,  # pyright: ignore[reportPrivateUsage]
+    _write_manifest,  # pyright: ignore[reportPrivateUsage]
 )
 from tests.integration.test_portfolio_repository import (
     accepted_batch,
@@ -155,6 +160,62 @@ async def test_daily_execute_reuses_nav_and_rejects_changed_bundle(
     )
     assert await _daily_execute(next_args, settings) == 2
     assert capsys.readouterr().err.strip() == "DAILY_EXECUTION_NOT_SCHEDULED"
+
+
+@pytest.mark.asyncio
+async def test_fkqt_manifest_prepare_then_execute_keeps_held_only_and_is_idempotent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    database = tmp_path / "bridge.db"
+    database_url = f"sqlite+aiosqlite:///{database.as_posix()}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    await asyncio.to_thread(command.upgrade, config, "head")
+    settings = Settings(database_url=database_url, execution_bundle_root=tmp_path / "frozen")
+    engine = create_engine(database_url)
+    try:
+        repository = PortfolioRepository(create_session_factory(engine))
+        await repository.create(CreatePortfolio(portfolio_id="portfolio-1", name="Demo"))
+        await accepted_batch(repository)
+        async with create_session_factory(engine).begin() as session:
+            session.add(PositionRecord(
+                id="bridge-held", portfolio_id="portfolio-1", symbol="300750.SZ",
+                quantity=100, average_cost=Decimal(10), total_cost=Decimal(1000),
+                last_price=Decimal(10), target_position_pct=Decimal("0.01"),
+                updated_at=datetime.now(UTC),
+            ))
+    finally:
+        await engine.dispose()
+
+    day = date(2026, 9, 22)
+    root = tmp_path / "upstream"
+    rows = [_row("000001.SZ"), _row("300750.SZ")]
+    for row in rows:
+        row["trade_date"] = "20260922"
+    _write_manifest(root, rows, day="20260922")
+    prepare = Namespace(trade_date=day, raw_file=None, manifest_root=str(root))
+    assert _prepare_execution(prepare, settings) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first["symbol_count"] == 2
+    assert first["source_manifest_id"]
+    execute = Namespace(
+        portfolio_id="portfolio-1", trade_date=day,
+        execution_bundle=first["execution_ref"],
+    )
+    assert await _daily_execute(execute, settings) == 0
+    assert json.loads(capsys.readouterr().out)["fill_count"] == 1
+    assert await _daily_execute(execute, settings) == 0
+    assert json.loads(capsys.readouterr().out)["fill_count"] == 0
+
+    changed_root = tmp_path / "upstream-changed"
+    rows[0]["open_price"] = "12"
+    _write_manifest(changed_root, rows, day="20260922")
+    prepare.manifest_root = str(changed_root)
+    assert _prepare_execution(prepare, settings) == 0
+    changed = json.loads(capsys.readouterr().out)
+    execute.execution_bundle = changed["execution_ref"]
+    assert await _daily_execute(execute, settings) == 2
+    assert capsys.readouterr().err.strip() == "EXECUTION_INPUT_CONFLICT"
 
 
 @pytest.mark.asyncio

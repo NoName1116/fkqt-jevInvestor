@@ -122,3 +122,7 @@ def test_prepare_execution_accepts_fkqt_manifest(
     ]) == 0
     output = json.loads(capsys.readouterr().out)
     assert Path(output["execution_ref"]).is_file()
+    assert len(output["source_manifest_id"]) == 64
+    origin = Path(output["execution_ref"]).with_suffix(".origin.json")
+    assert origin.is_file()
+    assert json.loads(origin.read_text(encoding="utf-8"))["source_manifest_id"] == output["source_manifest_id"]

@@ -117,6 +117,10 @@ def load_fkqt_execution_manifest(
         except (ValueError, ValidationError) as exc:
             raise FkqtBundleError("EXECUTION_SCHEMA_INVALID") from exc
     try:
-        return ExecutionBundleV1.create(trade_date, snapshots)
+        bundle = ExecutionBundleV1.create(trade_date, snapshots)
+        return bundle.model_copy(update={
+            "source_manifest_id": manifest.dataset_id,
+            "source_manifest_content_hash": manifest.content_hash,
+        })
     except (ValueError, ValidationError) as exc:
         raise FkqtBundleError(str(exc)) from exc

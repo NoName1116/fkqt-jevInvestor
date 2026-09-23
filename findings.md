@@ -213,3 +213,14 @@
 8. Secret 扫描无实际 Key 或长 Bearer Token 命中；两条 warning 分别来自 Starlette/AnyIO 和 FastAPI 的第三方弃用提示。
 9. 独立 Review 指出执行时间/日期、缺收盘价、历史重跑覆盖、决策输入变更与状态查询五类阻断或重要问题；修复采用收盘门禁、计划执行日查询、收盘价必填、已执行日先查 NAV、模型调用前比较稳定 run_id，以及决策日/执行日待办数分列。
 10. 复核又发现状态字段按日期跨组合混入快照与订单；最终改为通过本组合该日 `run_id` 关联决策输入、通过本次 `signal_batch_id` 关联虚拟订单。独立审查确认所有报告项关闭；最终离线测试仍为 `289 passed, 3 deselected`，Ruff/Pyright 全通过。
+
+## FKQT → 本项目 Tushare 前向行情桥接（2026-09-23）
+
+1. FKQT 既有三证券 Fixture 不适合动态候选池；新发布器独立接受有序候选与队列外持仓，六类决策数据复用原 Manifest/Parquet 存储契约，候选 rank 进入内容哈希。
+2. 执行行情由 FKQT 的 `get_execution_context` 提供，`daily.amount` 的千元单位须乘 1000 转为 CNY；官方 `stk_limit` 缺权限或缺字段时不能推算涨跌停价。
+3. 本项目只读 FKQT 文件边界，不导入 FKQT 代码或直连 Tushare；`daily prepare-execution` 保留原手工 JSON 入口，同时新增 `--manifest-root`，两者互斥。
+4. 执行包保留 `ExecutionBundleV1` 原内容哈希；来源 Manifest ID 与内容哈希写入同目录不可变 `.origin.json`，避免修改历史包 Schema 与幂等键。
+5. `daily required-symbols` 从指定日期的组合持仓和截至该日待执行订单导出排序去重的全集；执行时再次根据持久化状态验证覆盖，不依赖发布者声称的集合。
+6. 现有账本不能处理当日公司行为，发布器明确拒绝，不能把拆股、送股或派息误记为纯价格盈亏。停牌缺当日估值、正常交易缺开盘/收盘/成交额/涨跌停价同样拒绝。
+7. FKQT 测试发布器生成的决策与执行 Manifest 已在本项目真实读取，不是手写格式的单仓库模拟。完整离线测试 `302 passed, 3 deselected`，FKQT 相关测试 `24 passed`，Ruff/Pyright/Alembic 均通过。
+8. 未验证真实账号权限与 Tushare 当日数据可用时间；外部调度、候选文件来源、现金空仓日空证券执行包和主动告警仍是前向值守前置事项。

@@ -1,8 +1,8 @@
 # fkqt-jevInvestor 当前任务计划
 
-日期：2026-09-21
+日期：2026-09-23
 
-当前阶段：Phase 4 LLM 离散动作与确定性仓位最终验收
+当前阶段：FKQT → fkqt-jevInvestor Tushare 前向行情桥接验收
 
 | 步骤 | 内容 | 输入 | 输出 | 状态 |
 |---|---|---|---|---|
@@ -41,6 +41,8 @@
 | P33 | 冻结 Phase 5 日运行设计 | R46—R49 与 Phase 4 基线 | 收盘、D+1 执行、恢复、监控设计及实施计划 | 已完成 |
 | P34 | 实施 Phase 5 日运行链路 | Phase 5 设计 | 执行行情包、日运行 CLI、内容绑定幂等和状态查询 | 已完成 |
 | P35 | Phase 5 最终验收 | Phase 5 代码与文档 | 离线测试、静态检查、Secret 扫描和运行手册 | 已完成，独立 Review 阻断项已修复 |
+| P36 | FKQT 决策与执行发布器 | R63、桥接设计 | 任意候选/持仓范围的六类决策 Manifest 与执行 Manifest | 已完成，离线相关测试 24 项通过 |
+| P37 | 本项目 Manifest 导入与日运行对接 | R50—R53、FKQT 发布格式 | 冻结执行包、持仓/订单证券导出、审计来源、D+1 幂等执行 | 已完成，独立审查与 PR 待完成 |
 
 ## Phase 0 验收记录
 
@@ -106,3 +108,13 @@ Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收
 - DeepSeek SDK：`max_retries=0`，默认 `deepseek-flash`、`reasoning_effort=high`；Base URL、模型和推理强度进入正式键与数据库审计。
 - 独立审查：首轮 9 个 Important 与 3 个 Minor；9 个 Important 全部关闭，另修复嵌套 refusal 与 Decimal context，数据库到冻结目标的一键导出 CLI 作为 Phase 5 非阻断项记录。
 - 最终独立复核：当前 HEAD `7ab7193`，结论 `Ready to merge: Yes`，无剩余阻断项。
+
+## FKQT 前向行情桥接验收记录（2026-09-23）
+
+- FKQT 发布端相关离线测试：`24 passed`；4 条既有 FastAPI 弃用 warning。
+- 本项目完整离线测试：`302 passed, 3 deselected`；2 条第三方弃用 warning。
+- 本项目 Ruff：`All checks passed!`；Pyright：`0 errors, 0 warnings`；Alembic：`0007_phase4_llm_position_sizing (head)`。
+- 真正由 FKQT 测试发布器产生的决策六类 Manifest 已被本项目读取并冻结；执行 Manifest 已由本项目 CLI 校验并生成内容寻址执行包。
+- 集成测试覆盖候选外持仓、同包重放 `fill_count=0` 与换包 `EXECUTION_INPUT_CONFLICT`；契约测试覆盖缺字段、哈希篡改、日期/版本错误及同目录歧义。
+- 未验证真实 Tushare 账号的 `stk_limit`、`dividend` 等权限，也未接入外部调度、候选队列生成或告警。空证券全集的现金空仓日尚未形成可发布执行包；不能宣称无人值守前向运行已完成。
+- 代码审查、远端 PR 与 CI 状态以本阶段最终交付记录为准。
