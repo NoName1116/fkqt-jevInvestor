@@ -358,6 +358,27 @@ async def test_repeated_execution_does_not_create_another_fill(
 
 
 @pytest.mark.asyncio
+async def test_repeated_daily_execution_rejects_changed_frozen_input(
+    session_factory: SessionFactory,
+) -> None:
+    repository = PortfolioRepository(session_factory)
+    await repository.create(CreatePortfolio(portfolio_id="portfolio-1", name="Demo"))
+    await accepted_batch(repository)
+    first = ExecuteTradeDate(
+        portfolio_id="portfolio-1",
+        trade_date=date(2026, 9, 22),
+        expected_version=1,
+        market_snapshots={"000001.SZ": execution_market()},
+        execution_input_hash="a" * 64,
+    )
+    await repository.execute_trade_date(first)
+    with pytest.raises(PortfolioTransactionError, match="EXECUTION_INPUT_CONFLICT"):
+        await repository.execute_trade_date(first.model_copy(update={
+            "expected_version": 2, "execution_input_hash": "b" * 64,
+        }))
+
+
+@pytest.mark.asyncio
 async def test_c_group_sizing_signal_and_order_are_saved_atomically(
     session_factory: SessionFactory,
 ) -> None:

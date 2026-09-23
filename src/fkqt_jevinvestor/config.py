@@ -48,6 +48,10 @@ class Settings(BaseSettings):
         default=Path("data/snapshots"),
         validation_alias="JEV_INVESTOR_MARKET_SNAPSHOT_ROOT",
     )
+    execution_bundle_root: Path = Field(
+        default=Path("data/execution"),
+        validation_alias="JEV_INVESTOR_EXECUTION_BUNDLE_ROOT",
+    )
     c_group_snapshot_hash: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",

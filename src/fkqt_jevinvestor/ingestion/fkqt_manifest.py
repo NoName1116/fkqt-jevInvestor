@@ -52,8 +52,14 @@ class DatasetManifest(BaseModel):
 
 
 class FkqtManifestProvider:
-    def __init__(self, bundle_root: Path) -> None:
+    def __init__(
+        self,
+        bundle_root: Path,
+        *,
+        candidate_symbols: tuple[str, ...] | None = None,
+    ) -> None:
         self.root = bundle_root.resolve()
+        self.candidate_symbols = candidate_symbols
 
     async def freeze_snapshot(
         self,
@@ -79,7 +85,10 @@ class FkqtManifestProvider:
             for dataset_type in REQUIRED_DATASETS
         }
         self._validate_volume_unit(manifests["daily_bars"])
-        self._validate_universe(rows["candidate_universe"], normalized_symbols)
+        self._validate_universe(
+            rows["candidate_universe"],
+            self.candidate_symbols or normalized_symbols,
+        )
 
         next_trade_date = self._next_trade_date(rows["trading_calendar"], decision_date)
         calendar_complete_through = max(
@@ -128,7 +137,11 @@ class FkqtManifestProvider:
                     manifests[name],
                     decision_cutoff,
                     request_scope=(
-                        {**manifests[name].request_params, "symbols": list(normalized_symbols)}
+                        {
+                            **manifests[name].request_params,
+                            "symbols": list(normalized_symbols),
+                            "candidate_symbols": list(self.candidate_symbols or normalized_symbols),
+                        }
                         if name == "candidate_universe"
                         else manifests[name].request_params
                     ),
@@ -205,7 +218,7 @@ class FkqtManifestProvider:
         frozen_symbols = tuple(
             sorted({str(row.get("symbol", "")).strip().upper() for row in rows})
         )
-        if not frozen_symbols or frozen_symbols != expected_symbols:
+        if not frozen_symbols or frozen_symbols != tuple(sorted(set(expected_symbols))):
             raise FkqtBundleError("UNIVERSE_SYMBOL_MISMATCH")
 
     @staticmethod

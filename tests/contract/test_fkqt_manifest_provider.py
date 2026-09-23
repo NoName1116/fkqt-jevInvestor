@@ -157,6 +157,56 @@ async def test_valid_bundle_maps_to_auditable_market_snapshot(valid_bundle: Path
     assert len(snapshot.content_hash) == 64
 
 
+async def test_manifest_can_freeze_held_only_symbol_outside_candidate_universe(
+    valid_bundle: Path,
+) -> None:
+    _write_dataset(
+        valid_bundle,
+        "security_master",
+        [
+            {
+                "ts_code": symbol,
+                "name": symbol,
+                "market": "主板",
+                "list_date": "19991110",
+                "delist_date": None,
+            }
+            for symbol in ("600000.SH", "000001.SZ")
+        ],
+    )
+    _write_dataset(
+        valid_bundle,
+        "daily_bars",
+        [
+            {
+                "ts_code": symbol,
+                "trade_date": "20260918",
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.1,
+                "pre_close": 9.9,
+                "vol": 1000.0,
+                "amount": 10000.0,
+            }
+            for symbol in ("600000.SH", "000001.SZ")
+        ],
+    )
+    snapshot = await FkqtManifestProvider(
+        valid_bundle, candidate_symbols=("600000.SH",)
+    ).freeze_snapshot(
+        symbols=("000001.SZ", "600000.SH"),
+        decision_date=date(2026, 9, 18),
+        decision_cutoff=datetime(2026, 9, 18, 15, 30, tzinfo=SHANGHAI),
+        lookback_trading_days=61,
+    )
+    assert set(snapshot.daily_bars) == {"600000.SH", "000001.SZ"}
+    assert snapshot.source_audits[0].request_scope["candidate_symbols"] == ["600000.SH"]
+    assert snapshot.source_audits[0].request_scope["symbols"] == [
+        "000001.SZ", "600000.SH"
+    ]
+
+
 async def test_manifest_provider_rejects_symbols_outside_frozen_universe(
     valid_bundle: Path,
 ) -> None:

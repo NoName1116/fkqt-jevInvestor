@@ -200,3 +200,14 @@
 20. 当前冻结目标 Store 可由 Python 直接使用，但数据库到冻结 Target bundle 的一键导出 CLI 尚未实现，已作为 Phase 5 已知非阻断项记录。
 21. Phase 2 正式快照包含 23 项特征，Jev 只要求其中 20 项；C 组 Gate 必须做必需集合子集检查，并只以必需特征缺值作为 LLM 阻断条件。可选 `gap_fill_pct` 缺失不应拒绝合法输入。
 22. Phase 4 最终独立复核基于 HEAD `7ab7193` 给出 `Ready to merge: Yes`；原 9 个 Important 全部关闭，无剩余阻断项。
+
+## Phase 5 日频运行（2026-09-23）
+
+1. 现有 C 组单日 CLI 使用随机 `run_id`，不能直接作为无人值守的幂等入口；新 `daily close` 将组合、日期、冻结快照、候选池、容量、组合版本与 Provider 配置映射为稳定 UUID。
+2. 现有 Phase 1 执行引擎需要 D+1 开盘价和当日未复权收盘价；因此前向虚拟成交须在 D+1 收盘数据齐备后回放，不能宣称开盘即时执行。
+3. 现有组合执行在重复 NAV 日期返回历史结果，但原本不绑定执行行情输入；Phase 5 把执行包 hash 写入 `POST_EXECUTION` 快照的 `details_json`，同日换包重跑拒绝。
+4. FKQT Manifest 的候选池只列候选证券，而 C 组还要覆盖队列外持仓；Provider 现将候选池成员校验与全量行情证券范围分离，保留候选顺序审计。
+5. 执行原始行情文件先结构校验并生成内容寻址包；`daily execute` 再核对持仓、到期订单、日期、证券身份、开市状态和 hash，并冻结审计副本。
+6. 当前阶段仍依赖外部调度器与可信上游执行日 JSON；没有券商连接、实时开盘下单、内部告警发送或 A/B/D 批量实验。
+7. 阶段末完整离线测试为 `287 passed, 3 deselected`；Ruff 全通过，Pyright `0 errors, 0 warnings`，Alembic head 仍为 `0007_phase4_llm_position_sizing`，本阶段未增加数据库迁移。
+8. Secret 扫描无实际 Key 或长 Bearer Token 命中；两条 warning 分别来自 Starlette/AnyIO 和 FastAPI 的第三方弃用提示。

@@ -595,7 +595,7 @@ class PortfolioRepository:
                     record.updated_at = datetime.now(UTC)
                 for fill in result.fills:
                     session.add(_fill_record(fill))
-                session.add(_snapshot_record(result.snapshot))
+                session.add(_snapshot_record(result.snapshot, command.execution_input_hash))
                 session.add(_nav_record(command.portfolio_id, result.nav))
                 await session.flush()
                 return result
@@ -767,6 +767,11 @@ class PortfolioRepository:
         )
         if snapshot is None or nav is None:
             raise PortfolioTransactionError("EXECUTION_RESULT_NOT_FOUND")
+        if command.execution_input_hash is not None and (
+            snapshot.details_json is None
+            or snapshot.details_json.get("execution_input_hash") != command.execution_input_hash
+        ):
+            raise PortfolioTransactionError("EXECUTION_INPUT_CONFLICT")
         return ExecutionBatchResult(
             orders=tuple(_stored_order(item) for item in orders),
             fills=(),
@@ -780,7 +785,10 @@ def _stable_id(prefix: str, value: str) -> str:
     return f"{prefix}-{digest}"
 
 
-def _snapshot_record(snapshot: PortfolioSnapshot) -> PortfolioSnapshotRecord:
+def _snapshot_record(
+    snapshot: PortfolioSnapshot,
+    execution_input_hash: str | None = None,
+) -> PortfolioSnapshotRecord:
     return PortfolioSnapshotRecord(
         id=_stable_id(
             "snapshot",
@@ -796,7 +804,10 @@ def _snapshot_record(snapshot: PortfolioSnapshot) -> PortfolioSnapshotRecord:
         realized_pnl=snapshot.realized_pnl,
         unrealized_pnl=snapshot.unrealized_pnl,
         content_hash=snapshot.content_hash,
-        details_json=None,
+        details_json=(
+            {"execution_input_hash": execution_input_hash}
+            if execution_input_hash is not None else None
+        ),
     )
 
 

@@ -29,6 +29,7 @@ class ExecuteTradeDate(BaseModel):
     trade_date: date
     expected_version: int = Field(ge=1)
     market_snapshots: Mapping[str, MarketExecutionSnapshot]
+    execution_input_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class AssetIdentityError(RuntimeError):
