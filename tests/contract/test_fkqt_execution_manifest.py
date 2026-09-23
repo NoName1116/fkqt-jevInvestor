@@ -9,7 +9,11 @@ import pyarrow.parquet as pq
 import pytest
 
 from fkqt_jevinvestor.cli.main import main
-from fkqt_jevinvestor.ingestion.execution_bundle import ExecutionBundleStore, load_execution_bundle
+from fkqt_jevinvestor.ingestion.execution_bundle import (
+    ExecutionBundleStore,
+    ExecutionBundleV1,
+    load_execution_bundle,
+)
 from fkqt_jevinvestor.ingestion.fkqt_execution_manifest import (
     load_fkqt_execution_manifest,
 )
@@ -147,17 +151,17 @@ def test_prepare_execution_accepts_fkqt_manifest(
     assert json.loads(origin.read_text(encoding="utf-8"))["source_manifest_id"] == output["source_manifest_id"]
 
 
-def test_manual_bundle_cannot_gain_fkqt_origin_after_freeze(tmp_path: Path) -> None:
+def test_manual_and_fkqt_same_prices_keep_separate_origin(tmp_path: Path) -> None:
     root = tmp_path / "upstream"
     _write_manifest(root, [_row()])
     sourced = load_fkqt_execution_manifest(root, date(2026, 9, 25), set())
-    manual = sourced.model_copy(update={
-        "source_manifest_id": None, "source_manifest_content_hash": None,
-    })
+    manual = ExecutionBundleV1.create(date(2026, 9, 25), sourced.snapshots)
     store = ExecutionBundleStore(tmp_path / "frozen")
-    store.save(manual)
-    with pytest.raises(ValueError, match="EXECUTION_SOURCE_CONFLICT"):
-        store.save(sourced)
+    manual_path = store.save(manual)
+    sourced_path = store.save(sourced)
+    assert manual_path != sourced_path
+    assert json.loads(manual_path.with_suffix(".origin.json").read_text(encoding="utf-8"))["source_type"] == "MANUAL_JSON"
+    assert json.loads(sourced_path.with_suffix(".origin.json").read_text(encoding="utf-8"))["source_manifest_id"] == sourced.source_manifest_id
 
 
 def test_loaded_bundle_retains_verified_fkqt_origin(tmp_path: Path) -> None:
@@ -173,3 +177,22 @@ def test_loaded_bundle_retains_verified_fkqt_origin(tmp_path: Path) -> None:
     origin.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="EXECUTION_SOURCE_CONFLICT"):
         load_execution_bundle(path)
+
+
+def test_fkqt_bundle_rejects_lost_origin_but_legacy_manual_remains_readable(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "upstream"
+    _write_manifest(root, [_row()])
+    sourced = load_fkqt_execution_manifest(root, date(2026, 9, 25), set())
+    store = ExecutionBundleStore(tmp_path / "frozen")
+    path = store.save(sourced)
+    path.with_suffix(".origin.json").unlink()
+    with pytest.raises(ValueError, match="EXECUTION_SOURCE_MISSING"):
+        load_execution_bundle(path)
+    legacy = ExecutionBundleV1.create(date(2026, 9, 25), sourced.snapshots)
+    legacy_path = tmp_path / "legacy.json"
+    legacy_path.write_text(legacy.model_dump_json(exclude={"requires_origin"}), encoding="utf-8")
+    loaded_legacy = load_execution_bundle(legacy_path)
+    loaded_legacy.verify(date(2026, 9, 25), {"600000.SH"})
+    assert loaded_legacy.source_manifest_id is None

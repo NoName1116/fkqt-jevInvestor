@@ -19,6 +19,7 @@ class ExecutionBundleV1(BaseModel):
     trade_date: date
     snapshots: Mapping[str, MarketExecutionSnapshot]
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requires_origin: bool = False
     source_manifest_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", exclude=True)
     source_manifest_content_hash: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$", exclude=True
@@ -29,8 +30,10 @@ class ExecutionBundleV1(BaseModel):
         cls,
         trade_date: date,
         snapshots: Mapping[str, MarketExecutionSnapshot],
+        *,
+        requires_origin: bool = False,
     ) -> "ExecutionBundleV1":
-        payload = {
+        payload: dict[str, object] = {
             "schema_version": "execution-bundle-v1",
             "trade_date": trade_date.isoformat(),
             "snapshots": {
@@ -39,10 +42,13 @@ class ExecutionBundleV1(BaseModel):
             },
             "content_hash": "",
         }
+        if requires_origin:
+            payload["requires_origin"] = True
         bundle = cls(
             trade_date=trade_date,
             snapshots=snapshots,
             content_hash=sha256_json(payload),
+            requires_origin=requires_origin,
         )
         bundle.verify(trade_date, set(snapshots))
         return bundle
@@ -66,7 +72,9 @@ class ExecutionBundleV1(BaseModel):
             raise ValueError("EXECUTION_BUNDLE_SYMBOL_IDENTITY_MISMATCH")
         if not set(required_symbols).issubset(self.snapshots):
             raise ValueError("EXECUTION_SYMBOL_COVERAGE_INCOMPLETE")
-        payload = self.model_dump(mode="json")
+        payload = self.model_dump(
+            mode="json", exclude={"requires_origin"} if not self.requires_origin else None
+        )
         payload["content_hash"] = ""
         if sha256_json(payload) != self.content_hash:
             raise ValueError("EXECUTION_BUNDLE_HASH_MISMATCH")
@@ -79,6 +87,8 @@ def load_execution_bundle(path: Path) -> ExecutionBundleV1:
         raise ValueError("EXECUTION_BUNDLE_NOT_FOUND") from exc
     origin = path.with_suffix(".origin.json")
     if not origin.exists():
+        if bundle.requires_origin:
+            raise ValueError("EXECUTION_SOURCE_MISSING")
         return bundle
     try:
         raw_provenance: object = json.loads(origin.read_text(encoding="utf-8"))
@@ -90,10 +100,10 @@ def load_execution_bundle(path: Path) -> ExecutionBundleV1:
     if provenance.get("execution_hash") != bundle.content_hash:
         raise ValueError("EXECUTION_SOURCE_CONFLICT")
     if provenance.get("source_type") == "MANUAL_JSON":
-        if set(provenance) != {"execution_hash", "source_type"}:
+        if bundle.requires_origin or set(provenance) != {"execution_hash", "source_type"}:
             raise ValueError("EXECUTION_SOURCE_CONFLICT")
         return bundle
-    if provenance.get("source_type") != "FKQT_TUSHARE_MANIFEST":
+    if not bundle.requires_origin or provenance.get("source_type") != "FKQT_TUSHARE_MANIFEST":
         raise ValueError("EXECUTION_SOURCE_CONFLICT")
     source_id = provenance.get("source_manifest_id")
     source_hash = provenance.get("source_manifest_content_hash")
@@ -120,13 +130,17 @@ class ExecutionBundleStore:
 
     def save(self, bundle: ExecutionBundleV1) -> Path:
         bundle.verify(bundle.trade_date, set(bundle.snapshots))
+        if bundle.requires_origin != (bundle.source_manifest_id is not None):
+            raise ValueError("EXECUTION_SOURCE_CONFLICT")
         if bundle.source_manifest_id is not None and bundle.source_manifest_content_hash is None:
             raise ValueError("EXECUTION_SOURCE_HASH_REQUIRED")
         if bundle.source_manifest_id is None and bundle.source_manifest_content_hash is not None:
             raise ValueError("EXECUTION_SOURCE_CONFLICT")
         destination = self.root / bundle.trade_date.isoformat() / f"{bundle.content_hash}.json"
         destination.parent.mkdir(parents=True, exist_ok=True)
-        serialized = f"{canonical_json(bundle)}\n"
+        serialized = f"{canonical_json(bundle.model_dump(
+            mode='json', exclude={'requires_origin'} if not bundle.requires_origin else None
+        ))}\n"
         created = False
         try:
             with destination.open("x", encoding="utf-8", newline="\n") as handle:

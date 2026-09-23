@@ -72,7 +72,7 @@ $prepared = fkqt-jevinvestor daily prepare-execution --trade-date 2026-09-25 --m
 $prepared | ConvertTo-Json
 ```
 
-输出包含 `execution_hash`、`execution_ref`、`symbol_count` 和 `source_manifest_id`。`execution_ref` 同目录的 `.origin.json` 固定标识手工或 FKQT 来源；FKQT 来源还保存 Manifest ID 与内容哈希，并在执行时写入本项目的 `POST_EXECUTION` 审计记录。相同执行内容不能从手工来源改标为 FKQT 来源；执行包本身沿用历史 `ExecutionBundleV1` 内容哈希。普通交易证券缺涨跌停价、成交额、开盘价，或停牌持仓缺当日可审计估值价时整包拒绝。当前账本不能处理当日公司行为，FKQT 发布器会拒绝这类执行包。
+输出包含 `execution_hash`、`execution_ref`、`symbol_count` 和 `source_manifest_id`。`execution_ref` 同目录的 `.origin.json` 固定标识手工或 FKQT 来源；FKQT 来源还保存 Manifest ID 与内容哈希，并在执行时写入本项目的 `POST_EXECUTION` 审计记录。新 FKQT 执行包的内容哈希包含“来源文件必需”标记，丢失 `.origin.json` 会拒绝执行；历史手工 `ExecutionBundleV1` 的哈希与可读性保持不变。相同价格内容的手工包与 FKQT 包因此使用不同冻结路径。普通交易证券缺涨跌停价、成交额、开盘价，或停牌持仓缺当日可审计估值价时整包拒绝。当前账本不能处理当日公司行为，FKQT 发布器会拒绝这类执行包。
 
 ### 离线手工导入兼容入口
 
@@ -141,6 +141,7 @@ JSON 字段：`decision_run_count`、`decision_run_ids`、`market_snapshot_hashe
 | `DATA_CUTOFF_INVALID` | 前向决策 Manifest 缺失或伪造与 D 日收盘不一致的观察截止点 | 重新用当前 FKQT 发布器生成整包 |
 | `DECISION_DAY_BAR_MISSING` | 正常交易证券没有 D 日完整日线 | 等待 Tushare 当日日线发布后重试，不使用 D−1 价格 |
 | `EXECUTION_SOURCE_CONFLICT` | 相同执行内容被不同来源占用或来源记录被篡改 | 保留原文件审计，另用新冻结根目录准备可信输入 |
+| `EXECUTION_SOURCE_MISSING` | 新 FKQT 执行包缺少必需的 `.origin.json` | 恢复同一来源文件与原始 Manifest，不能改记为手工来源 |
 | `DATASET_VERSION_UNSUPPORTED` | 来源或版本与执行契约不符 | 发布 `TUSHARE_EXECUTION_V1` |
 | `PRICE_LIMIT_DATA_UNAVAILABLE` | 普通交易证券缺官方涨跌停价 | 检查 FKQT 的 `stk_limit` 权限与数据，不能估算 |
 | `CAPACITY_DATA_UNAVAILABLE` | 缺成交额 | 检查 FKQT `daily` 数据，不填零 |
