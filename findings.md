@@ -212,3 +212,4 @@
 7. 独立 Review 修复前完整离线测试为 `287 passed, 3 deselected`；修复后最终为 `289 passed, 3 deselected`。Ruff 全通过，Pyright `0 errors, 0 warnings`，Alembic head 仍为 `0007_phase4_llm_position_sizing`，本阶段未增加数据库迁移。
 8. Secret 扫描无实际 Key 或长 Bearer Token 命中；两条 warning 分别来自 Starlette/AnyIO 和 FastAPI 的第三方弃用提示。
 9. 独立 Review 指出执行时间/日期、缺收盘价、历史重跑覆盖、决策输入变更与状态查询五类阻断或重要问题；修复采用收盘门禁、计划执行日查询、收盘价必填、已执行日先查 NAV、模型调用前比较稳定 run_id，以及决策日/执行日待办数分列。
+10. 复核又发现状态字段按日期跨组合混入快照与订单；最终改为通过本组合该日 `run_id` 关联决策输入、通过本次 `signal_batch_id` 关联虚拟订单。独立审查确认所有报告项关闭；最终离线测试仍为 `289 passed, 3 deselected`，Ruff/Pyright 全通过。

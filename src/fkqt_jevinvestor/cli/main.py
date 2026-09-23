@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from fkqt_jevinvestor.config import Settings
 from fkqt_jevinvestor.domain.decision import PendingOrderSummaryV1
+from fkqt_jevinvestor.domain.execution import VirtualOrderStatus
 from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot
 from fkqt_jevinvestor.domain.market_time import market_close
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
@@ -26,7 +27,13 @@ from fkqt_jevinvestor.ingestion.snapshot_store import MarketSnapshotStore
 from fkqt_jevinvestor.persistence.decision_repository import DecisionEvaluationRepository
 from fkqt_jevinvestor.persistence.jev_repository import JevEvaluationRepository
 from fkqt_jevinvestor.persistence.market_repository import MarketSnapshotRepository
-from fkqt_jevinvestor.persistence.models import MarketSnapshotRecord, PositionSizingRunRecord
+from fkqt_jevinvestor.persistence.models import (
+    DecisionEvaluationRecord,
+    DecisionRunLinkRecord,
+    PositionSizingRunRecord,
+    SignalRecord,
+    VirtualOrderRecord,
+)
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.services.c_group_decision import (
@@ -476,24 +483,44 @@ async def _daily_status(args: argparse.Namespace, settings: Settings) -> int:
                     PositionSizingRunRecord.decision_date == args.trade_date,
                 )
             )).all())
-            snapshots = tuple((await session.scalars(
-                select(MarketSnapshotRecord.content_hash).where(
-                    MarketSnapshotRecord.decision_date == args.trade_date
-                )
-            )).all())
+            run_ids = tuple(item.run_id for item in decisions)
+            decision_inputs: tuple[dict[str, object], ...] = ()
+            if run_ids:
+                decision_inputs = tuple((await session.scalars(
+                    select(DecisionEvaluationRecord.input_json)
+                    .join(
+                        DecisionRunLinkRecord,
+                        DecisionRunLinkRecord.evaluation_id == DecisionEvaluationRecord.id,
+                    )
+                    .where(DecisionRunLinkRecord.run_id.in_(run_ids))
+                )).all())
+            batch_ids = tuple(sorted({
+                item.signal_batch_id for item in decisions
+                if item.signal_batch_id is not None
+            }))
+            scheduled_pending_count = 0
+            if batch_ids:
+                scheduled_pending_count = len(tuple((await session.scalars(
+                    select(VirtualOrderRecord.id)
+                    .join(SignalRecord, VirtualOrderRecord.signal_id == SignalRecord.id)
+                    .where(
+                        SignalRecord.batch_id.in_(batch_ids),
+                        VirtualOrderRecord.portfolio_id == args.portfolio_id,
+                        VirtualOrderRecord.status == VirtualOrderStatus.PENDING_NEXT_OPEN.value,
+                    )
+                )).all()))
         scheduled_dates = tuple(sorted({item.planned_execution_date for item in decisions}))
-        scheduled_pending_count = 0
-        for planned_date in scheduled_dates:
-            scheduled_pending_count += len(await repository.load_pending_orders(
-                args.portfolio_id, planned_date
-            ))
+        snapshot_hashes = sorted({
+            value for payload in decision_inputs
+            if isinstance((value := payload.get("market_snapshot_hash")), str)
+        })
         print(json.dumps({
             "portfolio_id": args.portfolio_id,
             "trade_date": args.trade_date.isoformat(),
             "portfolio_version": state.version,
             "decision_run_count": len(decisions),
-            "decision_run_ids": sorted(item.run_id for item in decisions),
-            "market_snapshot_hashes": sorted(set(snapshots)),
+            "decision_run_ids": sorted(run_ids),
+            "market_snapshot_hashes": snapshot_hashes,
             "planned_execution_dates": [item.isoformat() for item in scheduled_dates],
             "pending_order_count": len(pending),
             "scheduled_pending_order_count": scheduled_pending_count,

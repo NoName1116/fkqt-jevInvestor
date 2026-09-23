@@ -10,6 +10,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from pydantic import SecretStr
+from sqlalchemy import update
 
 from fkqt_jevinvestor.cli.main import (
     _daily_close,  # pyright: ignore[reportPrivateUsage]
@@ -19,7 +20,12 @@ from fkqt_jevinvestor.cli.main import (
 from fkqt_jevinvestor.config import Settings
 from fkqt_jevinvestor.domain.decision import DecisionAction
 from fkqt_jevinvestor.ingestion.execution_bundle import ExecutionBundleV1
-from fkqt_jevinvestor.persistence.models import PositionRecord
+from fkqt_jevinvestor.persistence.models import (
+    DecisionEvaluationRecord,
+    DecisionRunLinkRecord,
+    MarketSnapshotRecord,
+    PositionRecord,
+)
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.services.market_pipeline import MarketPipeline
@@ -148,6 +154,32 @@ async def test_daily_status_reports_next_day_orders_and_close_rejects_changed_in
         await repository.save_c_group_signal_batch(
             sizing, PositionSizingConfigV1(), to_validated_signal_batch(sizing), state
         )
+        async with session_factory.begin() as session:
+            session.add(DecisionRunLinkRecord(
+                id="run-link-1",
+                run_id=str(sizing.run_id),
+                evaluation_id="decision-000001.SZ",
+                created_at=datetime.now(UTC),
+            ))
+            await session.execute(
+                update(DecisionEvaluationRecord)
+                .where(DecisionEvaluationRecord.id == "decision-000001.SZ")
+                .values(input_json={"market_snapshot_hash": "a" * 64})
+            )
+            session.add(MarketSnapshotRecord(
+                id="unrelated-snapshot",
+                decision_date=date(2026, 9, 18),
+                decision_cutoff=datetime(2026, 9, 18, 15, tzinfo=UTC),
+                next_trade_date=date(2026, 9, 21),
+                calendar_complete_through=date(2026, 9, 21),
+                universe_snapshot_id="other-portfolio",
+                universe_snapshot_hash="b" * 64,
+                content_hash="c" * 64,
+                storage_path="unrelated.json",
+                source_manifests=[],
+                source_audits=[],
+                created_at=datetime.now(UTC),
+            ))
     finally:
         await engine.dispose()
 
@@ -156,6 +188,7 @@ async def test_daily_status_reports_next_day_orders_and_close_rejects_changed_in
     payload = json.loads(capsys.readouterr().out)
     assert payload["scheduled_pending_order_count"] == 1
     assert payload["planned_execution_dates"] == ["2026-09-21"]
+    assert payload["market_snapshot_hashes"] == ["a" * 64]
 
     async def changed_snapshot(*args: object, **kwargs: object) -> tuple[SimpleNamespace, dict[str, object]]:
         return SimpleNamespace(content_hash="b" * 64), {}
