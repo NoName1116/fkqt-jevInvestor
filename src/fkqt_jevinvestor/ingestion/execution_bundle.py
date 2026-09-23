@@ -1,7 +1,10 @@
+import json
+import re
 from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -71,9 +74,44 @@ class ExecutionBundleV1(BaseModel):
 
 def load_execution_bundle(path: Path) -> ExecutionBundleV1:
     try:
-        return ExecutionBundleV1.model_validate_json(path.read_text(encoding="utf-8"))
+        bundle = ExecutionBundleV1.model_validate_json(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise ValueError("EXECUTION_BUNDLE_NOT_FOUND") from exc
+    origin = path.with_suffix(".origin.json")
+    if not origin.exists():
+        return bundle
+    try:
+        raw_provenance: object = json.loads(origin.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("EXECUTION_SOURCE_CONFLICT") from exc
+    if not isinstance(raw_provenance, dict):
+        raise ValueError("EXECUTION_SOURCE_CONFLICT")  # noqa: TRY004
+    provenance = cast(dict[str, object], raw_provenance)
+    if provenance.get("execution_hash") != bundle.content_hash:
+        raise ValueError("EXECUTION_SOURCE_CONFLICT")
+    if provenance.get("source_type") == "MANUAL_JSON":
+        if set(provenance) != {"execution_hash", "source_type"}:
+            raise ValueError("EXECUTION_SOURCE_CONFLICT")
+        return bundle
+    if provenance.get("source_type") != "FKQT_TUSHARE_MANIFEST":
+        raise ValueError("EXECUTION_SOURCE_CONFLICT")
+    source_id = provenance.get("source_manifest_id")
+    source_hash = provenance.get("source_manifest_content_hash")
+    if (
+        set(provenance) != {
+            "execution_hash", "source_type", "source_manifest_id",
+            "source_manifest_content_hash",
+        }
+        or not isinstance(source_id, str)
+        or not isinstance(source_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", source_id) is None
+        or re.fullmatch(r"[0-9a-f]{64}", source_hash) is None
+    ):
+        raise ValueError("EXECUTION_SOURCE_CONFLICT")
+    return bundle.model_copy(update={
+        "source_manifest_id": source_id,
+        "source_manifest_content_hash": source_hash,
+    })
 
 
 class ExecutionBundleStore:
@@ -82,29 +120,38 @@ class ExecutionBundleStore:
 
     def save(self, bundle: ExecutionBundleV1) -> Path:
         bundle.verify(bundle.trade_date, set(bundle.snapshots))
+        if bundle.source_manifest_id is not None and bundle.source_manifest_content_hash is None:
+            raise ValueError("EXECUTION_SOURCE_HASH_REQUIRED")
+        if bundle.source_manifest_id is None and bundle.source_manifest_content_hash is not None:
+            raise ValueError("EXECUTION_SOURCE_CONFLICT")
         destination = self.root / bundle.trade_date.isoformat() / f"{bundle.content_hash}.json"
         destination.parent.mkdir(parents=True, exist_ok=True)
         serialized = f"{canonical_json(bundle)}\n"
+        created = False
         try:
             with destination.open("x", encoding="utf-8", newline="\n") as handle:
                 handle.write(serialized)
+            created = True
         except FileExistsError:
             if destination.read_text(encoding="utf-8") != serialized:
                 raise ValueError("EXECUTION_BUNDLE_STORE_CONFLICT") from None
+        origin = destination.with_suffix(".origin.json")
         if bundle.source_manifest_id is not None:
-            if bundle.source_manifest_content_hash is None:
-                raise ValueError("EXECUTION_SOURCE_HASH_REQUIRED")
-            origin = destination.with_suffix(".origin.json")
-            provenance = f"{canonical_json({
+            if not created and not origin.exists():
+                raise ValueError("EXECUTION_SOURCE_CONFLICT")
+            source = {
                 'execution_hash': bundle.content_hash,
                 'source_type': 'FKQT_TUSHARE_MANIFEST',
                 'source_manifest_id': bundle.source_manifest_id,
                 'source_manifest_content_hash': bundle.source_manifest_content_hash,
-            })}\n"
-            try:
-                with origin.open("x", encoding="utf-8", newline="\n") as handle:
-                    handle.write(provenance)
-            except FileExistsError:
-                if origin.read_text(encoding="utf-8") != provenance:
-                    raise ValueError("EXECUTION_SOURCE_CONFLICT") from None
+            }
+        else:
+            source = {'execution_hash': bundle.content_hash, 'source_type': 'MANUAL_JSON'}
+        provenance = f"{canonical_json(source)}\n"
+        try:
+            with origin.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(provenance)
+        except FileExistsError:
+            if origin.read_text(encoding="utf-8") != provenance:
+                raise ValueError("EXECUTION_SOURCE_CONFLICT") from None
         return destination

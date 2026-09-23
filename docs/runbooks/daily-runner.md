@@ -44,7 +44,7 @@ fkqt-jevinvestor daily required-symbols --trade-date 2026-09-24 --portfolio-id p
 python -m market_data.forward_cli decision --date 20260924 --candidate-file C:\data\candidate-20260924.txt --held-file C:\data\held-20260924.txt --source fkqt-queue-v1 --output-root C:\data\fkqt-forward\20260924
 ```
 
-发布器返回 `manifest_ids` 和 `bundle_root`；同一目录不得放不同范围或不同日期的 Manifest。回到本项目工作目录，设置路径及队列后决策：
+发布器先在同级临时目录完成六份快照，全部校验后整体发布；失败时目标目录不可见，可原命令重试。Manifest 的 `data_cutoff` 表示 D 日 15:00 的行情观察截止点，`fetched_at` 是实际抓取时间。两者不能证明 Tushare 后续没有修订数据；历史重放如需严格 point-in-time 证据，应使用具备历史版本的上游。发布器返回 `manifest_ids` 和 `bundle_root`；同一目录不得放不同范围或不同日期的 Manifest。回到本项目工作目录，设置路径及队列后决策：
 
 ```powershell
 $env:FKQT_MANIFEST_BUNDLE_ROOT = 'C:\data\fkqt-forward\20260924'
@@ -72,7 +72,7 @@ $prepared = fkqt-jevinvestor daily prepare-execution --trade-date 2026-09-25 --m
 $prepared | ConvertTo-Json
 ```
 
-输出包含 `execution_hash`、`execution_ref`、`symbol_count` 和 `source_manifest_id`。`execution_ref` 同目录的 `.origin.json` 保存 FKQT Manifest ID 与内容哈希供审计；执行包本身沿用历史 `ExecutionBundleV1` 内容哈希。普通交易证券缺涨跌停价、成交额、开盘价，或停牌持仓缺当日可审计估值价时整包拒绝。当前账本不能处理当日公司行为，FKQT 发布器会拒绝这类执行包。
+输出包含 `execution_hash`、`execution_ref`、`symbol_count` 和 `source_manifest_id`。`execution_ref` 同目录的 `.origin.json` 固定标识手工或 FKQT 来源；FKQT 来源还保存 Manifest ID 与内容哈希，并在执行时写入本项目的 `POST_EXECUTION` 审计记录。相同执行内容不能从手工来源改标为 FKQT 来源；执行包本身沿用历史 `ExecutionBundleV1` 内容哈希。普通交易证券缺涨跌停价、成交额、开盘价，或停牌持仓缺当日可审计估值价时整包拒绝。当前账本不能处理当日公司行为，FKQT 发布器会拒绝这类执行包。
 
 ### 离线手工导入兼容入口
 
@@ -111,7 +111,7 @@ $prepared = fkqt-jevinvestor daily prepare-execution --trade-date 2026-09-25 --r
 fkqt-jevinvestor daily execute --trade-date 2026-09-25 --portfolio-id paper-main --execution-bundle $prepared.execution_ref
 ```
 
-`<execution_hash>` 必须替换为上一步返回的 64 位 hash。程序重新验证包内容、日期、证券身份、交易日与持仓/待执行订单覆盖，再调用现有虚拟执行引擎。它使用 D+1 开盘价模拟成交、D+1 收盘价计算 NAV，所以须等完整日线发布后运行，不是开盘即时执行。输出成交数、总资产、单位净值、执行行情 hash 与冻结路径。重复同一命令返回 `fill_count=0`；换包重跑返回 `EXECUTION_INPUT_CONFLICT`。不可成交订单终态失效，不跨日追单。随后再运行 D+1 的 `daily close`。
+程序重新验证包内容、日期、证券身份、交易日与持仓/待执行订单覆盖，再调用现有虚拟执行引擎。它使用 D+1 开盘价模拟成交、D+1 收盘价计算 NAV，所以须等完整日线发布后运行，不是开盘即时执行。输出成交数、总资产、单位净值、执行行情 hash 与冻结路径。重复同一命令返回 `fill_count=0`；换包重跑返回 `EXECUTION_INPUT_CONFLICT`。不可成交订单终态失效，不跨日追单。随后再运行 D+1 的 `daily close`。
 
 ## 6. 状态与外部告警
 
@@ -138,6 +138,9 @@ JSON 字段：`decision_run_count`、`decision_run_ids`、`market_snapshot_hashe
 | `DATASET_MANIFEST_MISSING` | FKQT 执行目录没有 Manifest | 先运行 FKQT `execution` 发布命令 |
 | `DATASET_MANIFEST_AMBIGUOUS` | 同目录有多份 Manifest | 将每个范围、日期放入独立目录，不能猜测选择 |
 | `DATASET_HASH_MISMATCH` | FKQT Parquet 与 Manifest 内容哈希不符 | 保留原文件排查，不改写历史包 |
+| `DATA_CUTOFF_INVALID` | 前向决策 Manifest 缺失或伪造与 D 日收盘不一致的观察截止点 | 重新用当前 FKQT 发布器生成整包 |
+| `DECISION_DAY_BAR_MISSING` | 正常交易证券没有 D 日完整日线 | 等待 Tushare 当日日线发布后重试，不使用 D−1 价格 |
+| `EXECUTION_SOURCE_CONFLICT` | 相同执行内容被不同来源占用或来源记录被篡改 | 保留原文件审计，另用新冻结根目录准备可信输入 |
 | `DATASET_VERSION_UNSUPPORTED` | 来源或版本与执行契约不符 | 发布 `TUSHARE_EXECUTION_V1` |
 | `PRICE_LIMIT_DATA_UNAVAILABLE` | 普通交易证券缺官方涨跌停价 | 检查 FKQT 的 `stk_limit` 权限与数据，不能估算 |
 | `CAPACITY_DATA_UNAVAILABLE` | 缺成交额 | 检查 FKQT `daily` 数据，不填零 |

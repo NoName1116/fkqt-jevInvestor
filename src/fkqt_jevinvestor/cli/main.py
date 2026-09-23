@@ -495,6 +495,7 @@ async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
                     expected_version=state.version,
                     market_snapshots=bundle.snapshots,
                     execution_input_hash=bundle.content_hash,
+                    execution_source_manifest_id=bundle.source_manifest_id,
                 )
             )
             print(json.dumps({

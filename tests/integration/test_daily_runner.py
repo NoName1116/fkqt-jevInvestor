@@ -10,7 +10,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from pydantic import SecretStr
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from fkqt_jevinvestor.cli.main import (
     _daily_close,  # pyright: ignore[reportPrivateUsage]
@@ -26,6 +26,7 @@ from fkqt_jevinvestor.persistence.models import (
     DecisionEvaluationRecord,
     DecisionRunLinkRecord,
     MarketSnapshotRecord,
+    PortfolioSnapshotRecord,
     PositionRecord,
 )
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
@@ -204,6 +205,18 @@ async def test_fkqt_manifest_prepare_then_execute_keeps_held_only_and_is_idempot
     )
     assert await _daily_execute(execute, settings) == 0
     assert json.loads(capsys.readouterr().out)["fill_count"] == 1
+    engine = create_engine(database_url)
+    try:
+        async with create_session_factory(engine)() as session:
+            snapshot = await session.scalar(select(PortfolioSnapshotRecord).where(
+                PortfolioSnapshotRecord.portfolio_id == "portfolio-1",
+                PortfolioSnapshotRecord.snapshot_type == "POST_EXECUTION",
+            ))
+            assert snapshot is not None
+            assert snapshot.details_json is not None
+            assert snapshot.details_json["execution_source_manifest_id"] == first["source_manifest_id"]
+    finally:
+        await engine.dispose()
     assert await _daily_execute(execute, settings) == 0
     assert json.loads(capsys.readouterr().out)["fill_count"] == 0
 

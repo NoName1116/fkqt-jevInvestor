@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 from datetime import date
@@ -8,10 +9,12 @@ import pyarrow.parquet as pq
 import pytest
 
 from fkqt_jevinvestor.cli.main import main
+from fkqt_jevinvestor.ingestion.execution_bundle import ExecutionBundleStore, load_execution_bundle
 from fkqt_jevinvestor.ingestion.fkqt_execution_manifest import (
     load_fkqt_execution_manifest,
 )
 from fkqt_jevinvestor.ingestion.fkqt_manifest import FkqtBundleError
+from tests.contract.fkqt_execution_gold import MANIFEST_JSON, PARQUET_BASE64
 
 
 def _row(symbol: str = "600000.SH") -> dict[str, object]:
@@ -60,6 +63,22 @@ def test_fkqt_execution_manifest_maps_decimal_and_compact_date(tmp_path: Path) -
     assert bundle.trade_date == date(2026, 9, 25)
     assert str(bundle.snapshots["600000.SH"].daily_amount_cny) == "10000000"
     assert bundle.snapshots["600000.SH"].trade_date == date(2026, 9, 25)
+
+
+def test_real_fkqt_publisher_gold_is_consumable_without_importing_fkqt(tmp_path: Path) -> None:
+    manifest = json.loads(MANIFEST_JSON)
+    assert manifest["source"] == "TUSHARE"
+    assert manifest["dataset_version"] == "TUSHARE_EXECUTION_V1"
+    assert manifest["dataset_id"] == "e53eb5c3cb65115ab6039b121a7a29eaa1c20c1bf209fadf4908538b686866bb"
+    manifest_path = tmp_path / "manifests" / f"{manifest['dataset_id']}.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(MANIFEST_JSON, encoding="utf-8")
+    parquet_path = tmp_path / manifest["storage_path"]
+    parquet_path.parent.mkdir(parents=True)
+    parquet_path.write_bytes(base64.b64decode(PARQUET_BASE64))
+    bundle = load_fkqt_execution_manifest(tmp_path, date(2026, 9, 25), {"600000.SH"})
+    assert bundle.source_manifest_id == manifest["dataset_id"]
+    assert bundle.snapshots["600000.SH"].daily_amount_cny == 10_000_000
 
 
 def test_fkqt_execution_manifest_rejects_missing_held_symbol(tmp_path: Path) -> None:
@@ -126,3 +145,31 @@ def test_prepare_execution_accepts_fkqt_manifest(
     origin = Path(output["execution_ref"]).with_suffix(".origin.json")
     assert origin.is_file()
     assert json.loads(origin.read_text(encoding="utf-8"))["source_manifest_id"] == output["source_manifest_id"]
+
+
+def test_manual_bundle_cannot_gain_fkqt_origin_after_freeze(tmp_path: Path) -> None:
+    root = tmp_path / "upstream"
+    _write_manifest(root, [_row()])
+    sourced = load_fkqt_execution_manifest(root, date(2026, 9, 25), set())
+    manual = sourced.model_copy(update={
+        "source_manifest_id": None, "source_manifest_content_hash": None,
+    })
+    store = ExecutionBundleStore(tmp_path / "frozen")
+    store.save(manual)
+    with pytest.raises(ValueError, match="EXECUTION_SOURCE_CONFLICT"):
+        store.save(sourced)
+
+
+def test_loaded_bundle_retains_verified_fkqt_origin(tmp_path: Path) -> None:
+    root = tmp_path / "upstream"
+    _write_manifest(root, [_row()])
+    sourced = load_fkqt_execution_manifest(root, date(2026, 9, 25), set())
+    path = ExecutionBundleStore(tmp_path / "frozen").save(sourced)
+    loaded = load_execution_bundle(path)
+    assert loaded.source_manifest_id == sourced.source_manifest_id
+    origin = path.with_suffix(".origin.json")
+    payload = json.loads(origin.read_text(encoding="utf-8"))
+    payload["execution_hash"] = "0" * 64
+    origin.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="EXECUTION_SOURCE_CONFLICT"):
+        load_execution_bundle(path)
