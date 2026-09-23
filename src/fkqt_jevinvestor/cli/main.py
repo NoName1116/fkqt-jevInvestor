@@ -22,7 +22,8 @@ from fkqt_jevinvestor.ingestion.execution_bundle import (
     ExecutionBundleV1,
     load_execution_bundle,
 )
-from fkqt_jevinvestor.ingestion.fkqt_manifest import FkqtManifestProvider
+from fkqt_jevinvestor.ingestion.fkqt_execution_manifest import load_fkqt_execution_manifest
+from fkqt_jevinvestor.ingestion.fkqt_manifest import FkqtBundleError, FkqtManifestProvider
 from fkqt_jevinvestor.ingestion.snapshot_store import MarketSnapshotStore
 from fkqt_jevinvestor.persistence.decision_repository import DecisionEvaluationRepository
 from fkqt_jevinvestor.persistence.jev_repository import JevEvaluationRepository
@@ -83,10 +84,18 @@ def stable_daily_run_id(
 
 def _prepare_execution(args: argparse.Namespace, settings: Settings) -> int:
     try:
-        raw = Path(args.raw_file).read_text(encoding="utf-8")
-        snapshots = TypeAdapter(dict[str, MarketExecutionSnapshot]).validate_json(raw)
-        bundle = ExecutionBundleV1.create(args.trade_date, snapshots)
+        if getattr(args, "manifest_root", None) is not None:
+            bundle = load_fkqt_execution_manifest(
+                Path(args.manifest_root), args.trade_date, set()
+            )
+        else:
+            raw = Path(args.raw_file).read_text(encoding="utf-8")
+            snapshots = TypeAdapter(dict[str, MarketExecutionSnapshot]).validate_json(raw)
+            bundle = ExecutionBundleV1.create(args.trade_date, snapshots)
         path = ExecutionBundleStore(settings.execution_bundle_root).save(bundle)
+    except FkqtBundleError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except (OSError, RuntimeError, ValueError, ValidationError):
         print("EXECUTION_RAW_INPUT_INVALID", file=sys.stderr)
         return 2
@@ -95,8 +104,50 @@ def _prepare_execution(args: argparse.Namespace, settings: Settings) -> int:
         "execution_hash": bundle.content_hash,
         "execution_ref": str(path),
         "symbol_count": len(bundle.snapshots),
+        "source_manifest_id": bundle.source_manifest_id,
     }, ensure_ascii=False, sort_keys=True))
     return 0
+
+
+def _write_required_symbols_file(output: Path, content: str) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with output.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+    except FileExistsError:
+        if output.read_text(encoding="utf-8") != content:
+            raise ValueError("REQUIRED_SYMBOLS_FILE_CONFLICT") from None
+
+
+async def _daily_required_symbols(args: argparse.Namespace, settings: Settings) -> int:
+    engine = create_engine(settings.database_url)
+    try:
+        repository = PortfolioRepository(create_session_factory(engine))
+        state = await repository.get_state(args.portfolio_id, as_of=args.trade_date)
+        pending = await repository.load_pending_orders_through(
+            args.portfolio_id, args.trade_date
+        )
+        symbols = tuple(sorted(
+            {item.symbol for item in state.positions if item.quantity > 0}
+            | {item.symbol for item in pending}
+        ))
+        output = Path(args.output_file)
+        content = "".join(f"{symbol}\n" for symbol in symbols)
+        await asyncio.to_thread(_write_required_symbols_file, output, content)
+        print(json.dumps({
+            "portfolio_id": args.portfolio_id,
+            "trade_date": args.trade_date.isoformat(),
+            "output_file": str(output.resolve()),
+            "symbol_count": len(symbols),
+            "symbols": list(symbols),
+        }, ensure_ascii=False, sort_keys=True))
+        return 0
+    except (OSError, RuntimeError, ValueError) as exc:
+        message = str(exc)
+        print(message if message.isupper() else type(exc).__name__, file=sys.stderr)
+        return 2
+    finally:
+        await engine.dispose()
 
 
 async def _freeze_manifest(args: argparse.Namespace, settings: Settings) -> int:
@@ -444,6 +495,7 @@ async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
                     expected_version=state.version,
                     market_snapshots=bundle.snapshots,
                     execution_input_hash=bundle.content_hash,
+                    execution_source_manifest_id=bundle.source_manifest_id,
                 )
             )
             print(json.dumps({
@@ -564,7 +616,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     daily_subparsers = daily_parser.add_subparsers(dest="daily_command", required=True)
     prepare_parser = daily_subparsers.add_parser("prepare-execution")
     prepare_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
-    prepare_parser.add_argument("--raw-file", required=True)
+    prepare_source = prepare_parser.add_mutually_exclusive_group(required=True)
+    prepare_source.add_argument("--raw-file")
+    prepare_source.add_argument("--manifest-root")
+    required_parser = daily_subparsers.add_parser("required-symbols")
+    required_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
+    required_parser.add_argument("--portfolio-id", required=True)
+    required_parser.add_argument("--output-file", required=True)
     close_parser = daily_subparsers.add_parser("close")
     close_parser.add_argument("--date", dest="decision_date", type=date.fromisoformat, required=True)
     close_parser.add_argument("--portfolio-id", required=True)
@@ -588,6 +646,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return asyncio.run(_daily_close(args, Settings()))
     if args.command == "daily" and args.daily_command == "prepare-execution":
         return _prepare_execution(args, Settings())
+    if args.command == "daily" and args.daily_command == "required-symbols":
+        return asyncio.run(_daily_required_symbols(args, Settings()))
     if args.command == "daily" and args.daily_command == "execute":
         return asyncio.run(_daily_execute(args, Settings()))
     if args.command == "daily" and args.daily_command == "status":
