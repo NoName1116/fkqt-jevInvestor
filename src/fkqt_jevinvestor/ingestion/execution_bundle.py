@@ -20,9 +20,9 @@ class ExecutionBundleV1(BaseModel):
     snapshots: Mapping[str, MarketExecutionSnapshot]
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     requires_origin: bool = False
-    source_manifest_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", exclude=True)
+    source_manifest_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     source_manifest_content_hash: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$", exclude=True
+        default=None, pattern=r"^[0-9a-f]{64}$"
     )
 
     @classmethod
@@ -32,7 +32,13 @@ class ExecutionBundleV1(BaseModel):
         snapshots: Mapping[str, MarketExecutionSnapshot],
         *,
         requires_origin: bool = False,
+        source_manifest_id: str | None = None,
+        source_manifest_content_hash: str | None = None,
     ) -> "ExecutionBundleV1":
+        if requires_origin != (source_manifest_id is not None):
+            raise ValueError("EXECUTION_SOURCE_CONFLICT")
+        if requires_origin != (source_manifest_content_hash is not None):
+            raise ValueError("EXECUTION_SOURCE_CONFLICT")
         payload: dict[str, object] = {
             "schema_version": "execution-bundle-v1",
             "trade_date": trade_date.isoformat(),
@@ -44,11 +50,15 @@ class ExecutionBundleV1(BaseModel):
         }
         if requires_origin:
             payload["requires_origin"] = True
+            payload["source_manifest_id"] = source_manifest_id
+            payload["source_manifest_content_hash"] = source_manifest_content_hash
         bundle = cls(
             trade_date=trade_date,
             snapshots=snapshots,
             content_hash=sha256_json(payload),
             requires_origin=requires_origin,
+            source_manifest_id=source_manifest_id,
+            source_manifest_content_hash=source_manifest_content_hash,
         )
         bundle.verify(trade_date, set(snapshots))
         return bundle
@@ -73,7 +83,11 @@ class ExecutionBundleV1(BaseModel):
         if not set(required_symbols).issubset(self.snapshots):
             raise ValueError("EXECUTION_SYMBOL_COVERAGE_INCOMPLETE")
         payload = self.model_dump(
-            mode="json", exclude={"requires_origin"} if not self.requires_origin else None
+            mode="json",
+            exclude=(
+                {"requires_origin", "source_manifest_id", "source_manifest_content_hash"}
+                if not self.requires_origin else None
+            ),
         )
         payload["content_hash"] = ""
         if sha256_json(payload) != self.content_hash:
@@ -116,12 +130,11 @@ def load_execution_bundle(path: Path) -> ExecutionBundleV1:
         or not isinstance(source_hash, str)
         or re.fullmatch(r"[0-9a-f]{64}", source_id) is None
         or re.fullmatch(r"[0-9a-f]{64}", source_hash) is None
+        or source_id != bundle.source_manifest_id
+        or source_hash != bundle.source_manifest_content_hash
     ):
         raise ValueError("EXECUTION_SOURCE_CONFLICT")
-    return bundle.model_copy(update={
-        "source_manifest_id": source_id,
-        "source_manifest_content_hash": source_hash,
-    })
+    return bundle
 
 
 class ExecutionBundleStore:
@@ -139,7 +152,11 @@ class ExecutionBundleStore:
         destination = self.root / bundle.trade_date.isoformat() / f"{bundle.content_hash}.json"
         destination.parent.mkdir(parents=True, exist_ok=True)
         serialized = f"{canonical_json(bundle.model_dump(
-            mode='json', exclude={'requires_origin'} if not bundle.requires_origin else None
+            mode='json',
+            exclude=(
+                {'requires_origin', 'source_manifest_id', 'source_manifest_content_hash'}
+                if not bundle.requires_origin else None
+            ),
         ))}\n"
         created = False
         try:

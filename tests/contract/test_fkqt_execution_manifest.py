@@ -196,3 +196,17 @@ def test_fkqt_bundle_rejects_lost_origin_but_legacy_manual_remains_readable(
     loaded_legacy = load_execution_bundle(legacy_path)
     loaded_legacy.verify(date(2026, 9, 25), {"600000.SH"})
     assert loaded_legacy.source_manifest_id is None
+
+
+def test_fkqt_bundle_rejects_replaced_manifest_identity(tmp_path: Path) -> None:
+    root = tmp_path / "upstream"
+    _write_manifest(root, [_row()])
+    sourced = load_fkqt_execution_manifest(root, date(2026, 9, 25), set())
+    path = ExecutionBundleStore(tmp_path / "frozen").save(sourced)
+    origin = path.with_suffix(".origin.json")
+    provenance = json.loads(origin.read_text(encoding="utf-8"))
+    provenance["source_manifest_id"] = "f" * 64
+    provenance["source_manifest_content_hash"] = "e" * 64
+    origin.write_text(json.dumps(provenance), encoding="utf-8")
+    with pytest.raises(ValueError, match="EXECUTION_SOURCE_CONFLICT"):
+        load_execution_bundle(path)

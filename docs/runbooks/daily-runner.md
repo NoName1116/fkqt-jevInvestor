@@ -72,7 +72,7 @@ $prepared = fkqt-jevinvestor daily prepare-execution --trade-date 2026-09-25 --m
 $prepared | ConvertTo-Json
 ```
 
-输出包含 `execution_hash`、`execution_ref`、`symbol_count` 和 `source_manifest_id`。`execution_ref` 同目录的 `.origin.json` 固定标识手工或 FKQT 来源；FKQT 来源还保存 Manifest ID 与内容哈希，并在执行时写入本项目的 `POST_EXECUTION` 审计记录。新 FKQT 执行包的内容哈希包含“来源文件必需”标记，丢失 `.origin.json` 会拒绝执行；历史手工 `ExecutionBundleV1` 的哈希与可读性保持不变。相同价格内容的手工包与 FKQT 包因此使用不同冻结路径。普通交易证券缺涨跌停价、成交额、开盘价，或停牌持仓缺当日可审计估值价时整包拒绝。当前账本不能处理当日公司行为，FKQT 发布器会拒绝这类执行包。
+输出包含 `execution_hash`、`execution_ref`、`symbol_count` 和 `source_manifest_id`。`execution_ref` 同目录的 `.origin.json` 固定标识手工或 FKQT 来源；FKQT 来源的 Manifest ID、内容哈希和“来源文件必需”标记还进入新执行包的内容哈希，执行时来源 ID 写入本项目的 `POST_EXECUTION` 审计记录。丢失或改写 `.origin.json` 均会拒绝执行；历史手工 `ExecutionBundleV1` 的哈希与可读性保持不变。相同价格内容的手工包与 FKQT 包使用不同冻结路径。普通交易证券缺涨跌停价、成交额、开盘价，或停牌持仓缺当日可审计估值价时整包拒绝。当前账本不能处理当日公司行为，FKQT 发布器会拒绝这类执行包。
 
 ### 离线手工导入兼容入口
 

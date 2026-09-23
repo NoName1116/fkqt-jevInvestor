@@ -112,9 +112,9 @@ Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收
 ## FKQT 前向行情桥接验收记录（2026-09-23）
 
 - FKQT 发布端相关离线测试：`27 passed`；4 条既有 FastAPI 弃用 warning。
-- 本项目完整离线测试：`308 passed, 3 deselected`；2 条第三方弃用 warning。
+- 本项目完整离线测试：`309 passed, 3 deselected`；2 条第三方弃用 warning。
 - 本项目 Ruff：`All checks passed!`；Pyright：`0 errors, 0 warnings`；Alembic：`0007_phase4_llm_position_sizing (head)`。
 - 真正由 FKQT 测试发布器产生的决策六类 Manifest 已被本项目读取并冻结；执行 Manifest 已由本项目 CLI 校验并生成内容寻址执行包。
 - 集成测试覆盖候选外持仓、同包重放 `fill_count=0` 与换包 `EXECUTION_INPUT_CONFLICT`；契约测试覆盖缺字段、哈希篡改、日期/版本错误、同目录歧义、真实 FKQT 产物、D 日 bar 完整性及候选顺序。
 - 未验证真实 Tushare 账号的 `stk_limit`、`dividend` 等权限，也未接入外部调度、候选队列生成或告警。空证券全集的现金空仓日尚未形成可发布执行包；不能宣称无人值守前向运行已完成。
-- 首轮独立审查指出 1 个 Critical、5 个 Important、1 个 Minor；二轮复核指出 1 个剩余 Important，已通过新包哈希绑定来源必需标记修复，待最终复核。远端 PR 与 CI 状态以本阶段最终交付记录为准。
+- 首轮独立审查指出 1 个 Critical、5 个 Important、1 个 Minor；后续两轮复核要求把来源必需标记及具体 Manifest ID/哈希绑定到新包内容哈希，均已修复，待最终复核。远端 PR 与 CI 状态以本阶段最终交付记录为准。
