@@ -34,3 +34,8 @@ def test_execution_bundle_detects_tampering_and_missing_symbols() -> None:
                 "trading_day_status": TradingDayStatus.CLOSED,
             })},
         )
+    with pytest.raises(ValueError, match="EXECUTION_CLOSE_PRICE_REQUIRED"):
+        ExecutionBundleV1.create(
+            date(2026, 9, 24),
+            {"600000.SH": snapshot.model_copy(update={"unadjusted_close": None})},
+        )

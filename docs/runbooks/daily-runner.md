@@ -86,13 +86,17 @@ fkqt-jevinvestor daily execute --trade-date 2026-09-25 --portfolio-id paper-main
 fkqt-jevinvestor daily status --trade-date 2026-09-25 --portfolio-id paper-main
 ```
 
-JSON 字段：`decision_run_count`、`pending_order_count`、`execution_complete`、`portfolio_version`、`total_equity`。外部调度器应在收盘任务退出码非 0、执行任务退出码非 0、或预期执行日 `execution_complete=false` 时报警。本项目不运行常驻进程，也不发送短信或邮件。
+JSON 字段：`decision_run_count`、`decision_run_ids`、`market_snapshot_hashes`、`planned_execution_dates`、`scheduled_pending_order_count`、`pending_order_count`、`execution_complete`、`portfolio_version`、`total_equity`。`scheduled_pending_order_count` 是所查日期收盘决策产生的下一交易日待执行数；`pending_order_count` 是所查日期当天到期的待执行数。外部调度器应在收盘任务退出码非 0、执行任务退出码非 0、或预期执行日 `execution_complete=false` 时报警。本项目不运行常驻进程，也不发送短信或邮件。
 
 ## 7. 失败处理
 
 | 错误码 | 含义 | 操作 |
 |---|---|---|
 | `DAILY_CLOSE_BEFORE_CUTOFF` | D 日未收盘 | 15:00 后重跑 |
+| `DAILY_EXECUTE_BEFORE_CLOSE` | 执行日未收盘，完整估值行情尚未就绪 | 当日 15:00 后重跑 |
+| `DAILY_PREVIOUS_EXECUTION_REQUIRED` | 当天存在上日决策，但尚未完成当天模拟执行 | 先运行 `daily execute` |
+| `DAILY_DECISION_INPUT_CONFLICT` | 同组合/决策日已有不同冻结输入的正式运行 | 保留原运行，不在同日覆盖 |
+| `DAILY_EXECUTION_NOT_SCHEDULED` | 该日期无正式计划执行或到期订单 | 核对上日信号的计划执行日 |
 | `FKQT_MANIFEST_BUNDLE_ROOT_REQUIRED` | 未提供 Manifest 根目录 | 设置环境变量 |
 | `C_GROUP_CANDIDATE_CONFIG_INVALID` | 候选为空、重复或超容量 | 以冻结候选池为准修正 |
 | `UNIVERSE_SYMBOL_MISMATCH` | Manifest 候选池与配置不一致 | 发布匹配的冻结候选池 |
@@ -101,6 +105,7 @@ JSON 字段：`decision_run_count`、`pending_order_count`、`execution_complete
 | `EXECUTION_BUNDLE_HASH_MISMATCH` | 冻结行情包被改写 | 恢复原包，不能重算覆盖旧 hash |
 | `EXECUTION_BUNDLE_DATE_MISMATCH` | 命令日期与包日期不一致 | 使用正确交易日的包 |
 | `EXECUTION_TRADING_DAY_NOT_CONFIRMED` | 没有有效开市证据 | 上游补齐交易日状态 |
+| `EXECUTION_CLOSE_PRICE_REQUIRED` | 存在缺失的未复权收盘价，不能计算 NAV | 上游补齐完整收盘行情 |
 | `EXECUTION_SYMBOL_COVERAGE_INCOMPLETE` | 缺持仓或订单证券 | 上游补齐该证券行情 |
 | `EXECUTION_INPUT_CONFLICT` | 已执行日换用不同包 | 保留原执行记录，另建独立实验而非覆盖 |
 | `PORTFOLIO_VERSION_CONFLICT` | 并发修改组合 | 查询状态，停止重复调度，核对执行记录 |

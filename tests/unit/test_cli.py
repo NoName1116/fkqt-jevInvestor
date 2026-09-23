@@ -1,5 +1,5 @@
 import json
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -161,3 +161,14 @@ def test_prepare_execution_freezes_raw_market_file(
     output = json.loads(capsys.readouterr().out)
     assert Path(output["execution_ref"]).is_file()
     assert output["symbol_count"] == 1
+
+
+def test_daily_execute_rejects_before_trade_date_close(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    future_date = datetime.now(UTC).date() + timedelta(days=3)
+    assert main([
+        "daily", "execute", "--trade-date", future_date.isoformat(),
+        "--portfolio-id", "paper-main", "--execution-bundle", "missing.json",
+    ]) == 2
+    assert capsys.readouterr().err.strip() == "DAILY_EXECUTE_BEFORE_CLOSE"

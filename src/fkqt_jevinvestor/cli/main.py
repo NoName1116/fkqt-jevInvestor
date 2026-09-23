@@ -26,7 +26,7 @@ from fkqt_jevinvestor.ingestion.snapshot_store import MarketSnapshotStore
 from fkqt_jevinvestor.persistence.decision_repository import DecisionEvaluationRepository
 from fkqt_jevinvestor.persistence.jev_repository import JevEvaluationRepository
 from fkqt_jevinvestor.persistence.market_repository import MarketSnapshotRepository
-from fkqt_jevinvestor.persistence.models import PositionSizingRunRecord
+from fkqt_jevinvestor.persistence.models import MarketSnapshotRecord, PositionSizingRunRecord
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.services.c_group_decision import (
@@ -358,6 +358,27 @@ async def _daily_close(args: argparse.Namespace, settings: Settings) -> int:
         snapshot, _ = await pipeline.freeze_and_compute(
             symbols, args.decision_date, decision_cutoff_for_date(args.decision_date)
         )
+        expected_run_id = stable_daily_run_id(
+            args.portfolio_id,
+            args.decision_date,
+            snapshot.content_hash,
+            candidates,
+            args.candidate_limit,
+            portfolio.version,
+            f"{settings.typesafe_model}:{settings.deepseek_base_url}:"
+            f"{settings.deepseek_model}:{settings.deepseek_reasoning_effort}",
+        )
+        async with session_factory() as session:
+            existing_runs = tuple((await session.scalars(
+                select(PositionSizingRunRecord).where(
+                    PositionSizingRunRecord.portfolio_id == args.portfolio_id,
+                    PositionSizingRunRecord.decision_date == args.decision_date,
+                )
+            )).all())
+        if existing_runs and any(
+            item.run_id != str(expected_run_id) for item in existing_runs
+        ):
+            raise ValueError("DAILY_DECISION_INPUT_CONFLICT")
     except (OSError, RuntimeError, ValueError) as exc:
         message = str(exc)
         print(message if message.isupper() else type(exc).__name__, file=sys.stderr)
@@ -374,15 +395,39 @@ async def _daily_close(args: argparse.Namespace, settings: Settings) -> int:
 
 
 async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
+    if datetime.now().astimezone() < decision_cutoff_for_date(args.trade_date):
+        print("DAILY_EXECUTE_BEFORE_CLOSE", file=sys.stderr)
+        return 2
     try:
         bundle = load_execution_bundle(Path(args.execution_bundle))
         engine = create_engine(settings.database_url)
         try:
-            repository = PortfolioRepository(create_session_factory(engine))
+            session_factory = create_session_factory(engine)
+            repository = PortfolioRepository(session_factory)
             state = await repository.get_state(args.portfolio_id)
-            pending = await repository.load_pending_orders(args.portfolio_id, args.trade_date)
-            required = {item.symbol for item in state.positions if item.quantity > 0}
-            required.update(item.symbol for item in pending)
+            completed = any(
+                item.valuation_date == args.trade_date
+                for item in await repository.list_nav(args.portfolio_id)
+            )
+            required: set[str] = set()
+            if not completed:
+                due = await repository.load_pending_orders(
+                    args.portfolio_id, args.trade_date
+                )
+                open_orders = await repository.load_pending_orders_through(
+                    args.portfolio_id, args.trade_date
+                )
+                async with session_factory() as session:
+                    scheduled = await session.scalar(
+                        select(PositionSizingRunRecord.id).where(
+                            PositionSizingRunRecord.portfolio_id == args.portfolio_id,
+                            PositionSizingRunRecord.planned_execution_date == args.trade_date,
+                        ).limit(1)
+                    )
+                if not due and scheduled is None:
+                    raise ValueError("DAILY_EXECUTION_NOT_SCHEDULED")
+                required = {item.symbol for item in state.positions if item.quantity > 0}
+                required.update(item.symbol for item in open_orders)
             bundle.verify(args.trade_date, required)
             frozen_path = ExecutionBundleStore(settings.execution_bundle_root).save(bundle)
             result = await repository.execute_trade_date(
@@ -431,12 +476,27 @@ async def _daily_status(args: argparse.Namespace, settings: Settings) -> int:
                     PositionSizingRunRecord.decision_date == args.trade_date,
                 )
             )).all())
+            snapshots = tuple((await session.scalars(
+                select(MarketSnapshotRecord.content_hash).where(
+                    MarketSnapshotRecord.decision_date == args.trade_date
+                )
+            )).all())
+        scheduled_dates = tuple(sorted({item.planned_execution_date for item in decisions}))
+        scheduled_pending_count = 0
+        for planned_date in scheduled_dates:
+            scheduled_pending_count += len(await repository.load_pending_orders(
+                args.portfolio_id, planned_date
+            ))
         print(json.dumps({
             "portfolio_id": args.portfolio_id,
             "trade_date": args.trade_date.isoformat(),
             "portfolio_version": state.version,
             "decision_run_count": len(decisions),
+            "decision_run_ids": sorted(item.run_id for item in decisions),
+            "market_snapshot_hashes": sorted(set(snapshots)),
+            "planned_execution_dates": [item.isoformat() for item in scheduled_dates],
             "pending_order_count": len(pending),
+            "scheduled_pending_order_count": scheduled_pending_count,
             "execution_complete": nav is not None,
             "total_equity": str(nav.total_equity) if nav else None,
         }, ensure_ascii=False, sort_keys=True))

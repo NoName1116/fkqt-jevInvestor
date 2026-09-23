@@ -50,6 +50,8 @@ class ExecutionBundleV1(BaseModel):
             for snapshot in self.snapshots.values()
         ):
             raise ValueError("EXECUTION_TRADING_DAY_NOT_CONFIRMED")
+        if any(snapshot.unadjusted_close is None for snapshot in self.snapshots.values()):
+            raise ValueError("EXECUTION_CLOSE_PRICE_REQUIRED")
         if any(
             symbol != snapshot.symbol or snapshot.trade_date != trade_date
             for symbol, snapshot in self.snapshots.items()

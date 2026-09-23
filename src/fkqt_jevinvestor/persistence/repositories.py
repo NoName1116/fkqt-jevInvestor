@@ -534,6 +534,23 @@ class PortfolioRepository:
             )
         return tuple(_stored_order(item) for item in records)
 
+    async def load_pending_orders_through(
+        self,
+        portfolio_id: str,
+        trade_date: date,
+    ) -> tuple[StoredOrder, ...]:
+        async with self._session_factory() as session:
+            records = tuple((await session.scalars(
+                select(VirtualOrderRecord)
+                .where(
+                    VirtualOrderRecord.portfolio_id == portfolio_id,
+                    VirtualOrderRecord.planned_execution_date <= trade_date,
+                    VirtualOrderRecord.status == VirtualOrderStatus.PENDING_NEXT_OPEN.value,
+                )
+                .order_by(VirtualOrderRecord.id)
+            )).all())
+        return tuple(_stored_order(item) for item in records)
+
     async def execute_trade_date(self, command: ExecuteTradeDate) -> ExecutionBatchResult:
         try:
             async with self._session_factory.begin() as session:

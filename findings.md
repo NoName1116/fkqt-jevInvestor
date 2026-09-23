@@ -209,5 +209,6 @@
 4. FKQT Manifest 的候选池只列候选证券，而 C 组还要覆盖队列外持仓；Provider 现将候选池成员校验与全量行情证券范围分离，保留候选顺序审计。
 5. 执行原始行情文件先结构校验并生成内容寻址包；`daily execute` 再核对持仓、到期订单、日期、证券身份、开市状态和 hash，并冻结审计副本。
 6. 当前阶段仍依赖外部调度器与可信上游执行日 JSON；没有券商连接、实时开盘下单、内部告警发送或 A/B/D 批量实验。
-7. 阶段末完整离线测试为 `287 passed, 3 deselected`；Ruff 全通过，Pyright `0 errors, 0 warnings`，Alembic head 仍为 `0007_phase4_llm_position_sizing`，本阶段未增加数据库迁移。
+7. 独立 Review 修复前完整离线测试为 `287 passed, 3 deselected`；修复后最终为 `289 passed, 3 deselected`。Ruff 全通过，Pyright `0 errors, 0 warnings`，Alembic head 仍为 `0007_phase4_llm_position_sizing`，本阶段未增加数据库迁移。
 8. Secret 扫描无实际 Key 或长 Bearer Token 命中；两条 warning 分别来自 Starlette/AnyIO 和 FastAPI 的第三方弃用提示。
+9. 独立 Review 指出执行时间/日期、缺收盘价、历史重跑覆盖、决策输入变更与状态查询五类阻断或重要问题；修复采用收盘门禁、计划执行日查询、收盘价必填、已执行日先查 NAV、模型调用前比较稳定 run_id，以及决策日/执行日待办数分列。
