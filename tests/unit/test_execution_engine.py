@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 
+from fkqt_jevinvestor.domain.decision import DecisionAction
 from fkqt_jevinvestor.domain.execution import (
     ExecutionPolicy,
     OrderSide,
@@ -31,6 +32,12 @@ from fkqt_jevinvestor.services.execution_engine import (
     execute_order_batch,
 )
 from fkqt_jevinvestor.services.portfolio_service import PortfolioLedger
+from fkqt_jevinvestor.services.position_sizing import (
+    PositionSizingRunV1,
+    SizedTargetV1,
+    SizingStatus,
+    to_validated_signal_batch,
+)
 
 
 def market(**overrides: object) -> MarketExecutionSnapshot:
@@ -230,6 +237,50 @@ def test_build_order_drafts_maps_actions_and_skips_noop_signals() -> None:
         ("000001.SZ", OrderSide.BUY),
     ]
     assert len({item.idempotency_key for item in drafts}) == 2
+
+
+def test_blocked_enter_from_position_sizer_never_creates_order() -> None:
+    run = PositionSizingRunV1(
+        run_id="run-1",
+        portfolio_id="portfolio-1",
+        portfolio_version=1,
+        decision_date=date(2026, 9, 21),
+        planned_execution_date=date(2026, 9, 22),
+        sizing_version="position-sizing-v1",
+        config_hash="a" * 64,
+        input_hash="b" * 64,
+        targets=(
+            SizedTargetV1(
+                symbol="000001.SZ",
+                decision_evaluation_id="decision-1",
+                requested_action=DecisionAction.ENTER,
+                status=SizingStatus.BLOCKED,
+                current_position_pct=Decimal(0),
+                raw_target_position_pct=Decimal(0),
+                target_position_pct=Decimal(0),
+                signal_action=SignalAction.AVOID,
+                block_code="LIQUIDITY_ENTRY_FLOOR",
+                thesis="冻结证据支持该动作。",
+                invalidation="冻结证据失效。",
+            ),
+        ),
+        gross_target_pct=Decimal(0),
+        cash_target_pct=Decimal(1),
+        target_batch_hash="c" * 64,
+        run_code=None,
+    )
+    validated = to_validated_signal_batch(run)
+    state = PortfolioState(
+        portfolio_id="portfolio-1",
+        cash_balance=Decimal(10000),
+        frozen_cash=Decimal(0),
+        realized_pnl=Decimal(0),
+        version=1,
+    )
+
+    drafts = build_order_drafts(validated, state, ExecutionPolicy(), date(2026, 9, 22))
+
+    assert drafts == ()
 
 
 def test_execute_sells_before_buys_and_uses_released_cash() -> None:

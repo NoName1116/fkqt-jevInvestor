@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -232,3 +233,312 @@ class NavRecord(Base):
     daily_return: Mapped[Decimal] = mapped_column(RATIO)
     cumulative_return: Mapped[Decimal] = mapped_column(RATIO)
     max_drawdown: Mapped[Decimal] = mapped_column(RATIO)
+
+
+class MarketSnapshotRecord(Base):
+    __tablename__ = "ai_signal_market_snapshot"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_date",
+            "content_hash",
+            name="uq_ai_signal_market_snapshot_date_hash",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    decision_date: Mapped[date] = mapped_column(Date)
+    decision_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    next_trade_date: Mapped[date] = mapped_column(Date)
+    calendar_complete_through: Mapped[date] = mapped_column(Date)
+    universe_snapshot_id: Mapped[str] = mapped_column(String(128))
+    universe_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    storage_path: Mapped[str] = mapped_column(String(1024))
+    source_manifests: Mapped[list[str]] = mapped_column(JSON)
+    source_audits: Mapped[list[dict[str, object]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MarketFeatureRecord(Base):
+    __tablename__ = "ai_signal_market_feature"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_snapshot_id",
+            "symbol",
+            "feature_code",
+            "feature_version",
+            name="uq_ai_signal_market_feature_identity",
+        ),
+        CheckConstraint(
+            "(value IS NULL) != (missing_reason IS NULL)",
+            name="feature_value_xor_missing_reason",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    market_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_market_snapshot.id", ondelete="CASCADE")
+    )
+    symbol: Mapped[str] = mapped_column(String(16))
+    feature_code: Mapped[str] = mapped_column(String(64))
+    feature_version: Mapped[str] = mapped_column(String(64))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lookback_window: Mapped[int] = mapped_column(Integer)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    missing_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    feature_snapshot_hash: Mapped[str] = mapped_column(String(64))
+
+
+class JevEvaluationRecord(Base):
+    __tablename__ = "ai_signal_jev_evaluation"
+    __table_args__ = (
+        UniqueConstraint("formal_key", name="uq_ai_signal_jev_evaluation_formal_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    formal_key: Mapped[str] = mapped_column(String(64))
+    scope: Mapped[str] = mapped_column(String(16))
+    symbol: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    decision_date: Mapped[date] = mapped_column(Date)
+    decision_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    state_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    provider_name: Mapped[str] = mapped_column(String(64))
+    provider_version: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str] = mapped_column(String(128))
+    state_schema_version: Mapped[str] = mapped_column(String(64))
+    question_set_version: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    latest_attempt_sequence: Mapped[int] = mapped_column(Integer)
+    current_owner_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class JevAttemptRecord(Base):
+    __tablename__ = "ai_signal_jev_attempt"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_id",
+            "sequence",
+            name="uq_ai_signal_jev_attempt_sequence",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id", ondelete="CASCADE")
+    )
+    run_id: Mapped[str] = mapped_column(String(36))
+    owner_token: Mapped[str] = mapped_column(String(36))
+    sequence: Mapped[int] = mapped_column(Integer)
+    provider_name: Mapped[str] = mapped_column(String(64))
+    provider_version: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str] = mapped_column(String(128))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32))
+    raw_response_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class JevQuestionResultRecord(Base):
+    __tablename__ = "ai_signal_jev_question_result"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_id",
+            "question_id",
+            name="uq_ai_signal_jev_question_result_question",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id", ondelete="CASCADE")
+    )
+    question_id: Mapped[str] = mapped_column(String(64))
+    question_version: Mapped[str] = mapped_column(String(64))
+    criteria_version: Mapped[str] = mapped_column(String(64))
+    label_order_json: Mapped[list[str]] = mapped_column(JSON)
+    selected_label: Mapped[str] = mapped_column(String(64))
+    distribution_json: Mapped[dict[str, str]] = mapped_column(JSON)
+
+
+class JevRunLinkRecord(Base):
+    __tablename__ = "ai_signal_jev_run_link"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "evaluation_id",
+            name="uq_ai_signal_jev_run_link_run_evaluation",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(36))
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id", ondelete="CASCADE")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DecisionEvaluationRecord(Base):
+    __tablename__ = "ai_signal_llm_decision_evaluation"
+    __table_args__ = (
+        UniqueConstraint(
+            "formal_key",
+            name="uq_ai_signal_llm_decision_evaluation_formal_key",
+        ),
+        CheckConstraint(
+            "raw_response_text IS NULL OR length(raw_response_text) <= 4096",
+            name="llm_decision_raw_response_length",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    formal_key: Mapped[str] = mapped_column(String(64))
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    symbol: Mapped[str] = mapped_column(String(16))
+    membership: Mapped[str] = mapped_column(String(16))
+    decision_date: Mapped[date] = mapped_column(Date)
+    decision_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    input_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    universe_jev_evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id")
+    )
+    symbol_jev_evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_jev_evaluation.id")
+    )
+    provider_name: Mapped[str] = mapped_column(String(64))
+    provider_version: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str] = mapped_column(String(128))
+    provider_base_url: Mapped[str] = mapped_column(String(512))
+    reasoning_effort: Mapped[str] = mapped_column(String(16))
+    prompt_version: Mapped[str] = mapped_column(String(64))
+    output_schema_version: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    action: Mapped[str] = mapped_column(String(16))
+    thesis: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    invalidation: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    raw_response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_response_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    latest_attempt_sequence: Mapped[int] = mapped_column(Integer)
+    current_owner_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DecisionAttemptRecord(Base):
+    __tablename__ = "ai_signal_llm_decision_attempt"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_id",
+            "sequence",
+            name="uq_ai_signal_llm_decision_attempt_sequence",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_llm_decision_evaluation.id", ondelete="CASCADE")
+    )
+    run_id: Mapped[str] = mapped_column(String(36))
+    owner_token: Mapped[str] = mapped_column(String(36))
+    sequence: Mapped[int] = mapped_column(Integer)
+    provider_name: Mapped[str] = mapped_column(String(64))
+    provider_version: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str] = mapped_column(String(128))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32))
+    raw_response_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class DecisionRunLinkRecord(Base):
+    __tablename__ = "ai_signal_llm_decision_run_link"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "evaluation_id",
+            name="uq_ai_signal_llm_decision_run_link_run_evaluation",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(36))
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_llm_decision_evaluation.id", ondelete="CASCADE")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PositionSizingRunRecord(Base):
+    __tablename__ = "ai_signal_position_sizing_run"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_ai_signal_position_sizing_run_run"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(36))
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"))
+    portfolio_version: Mapped[int] = mapped_column(Integer)
+    decision_date: Mapped[date] = mapped_column(Date)
+    planned_execution_date: Mapped[date] = mapped_column(Date)
+    sizing_version: Mapped[str] = mapped_column(String(64))
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    config_hash: Mapped[str] = mapped_column(String(64))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    decision_portfolio_hash: Mapped[str] = mapped_column(String(64))
+    target_batch_hash: Mapped[str] = mapped_column(String(64))
+    gross_target_pct: Mapped[Decimal] = mapped_column(RATIO)
+    cash_target_pct: Mapped[Decimal] = mapped_column(RATIO)
+    run_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    signal_batch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("ai_signal_signal_batch.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PositionTargetRecord(Base):
+    __tablename__ = "ai_signal_position_target"
+    __table_args__ = (
+        UniqueConstraint(
+            "sizing_run_id",
+            "symbol",
+            name="uq_ai_signal_position_target_symbol",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    sizing_run_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_position_sizing_run.id", ondelete="CASCADE")
+    )
+    decision_evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_signal_llm_decision_evaluation.id")
+    )
+    symbol: Mapped[str] = mapped_column(String(16))
+    requested_action: Mapped[str] = mapped_column(String(16))
+    sizing_status: Mapped[str] = mapped_column(String(16))
+    current_position_pct: Mapped[Decimal] = mapped_column(RATIO)
+    raw_target_position_pct: Mapped[Decimal] = mapped_column(RATIO)
+    target_position_pct: Mapped[Decimal] = mapped_column(RATIO)
+    signal_action: Mapped[str] = mapped_column(String(16))
+    block_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
