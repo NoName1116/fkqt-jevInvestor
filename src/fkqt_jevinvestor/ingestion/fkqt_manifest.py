@@ -16,7 +16,7 @@ from fkqt_jevinvestor.domain.market_features import (
     MarketSourceAudit,
     SecurityTradeState,
 )
-from fkqt_jevinvestor.domain.market_time import validate_decision_cutoff
+from fkqt_jevinvestor.domain.market_time import market_close, validate_decision_cutoff
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
 
 REQUIRED_DATASETS = (
@@ -52,8 +52,14 @@ class DatasetManifest(BaseModel):
 
 
 class FkqtManifestProvider:
-    def __init__(self, bundle_root: Path) -> None:
+    def __init__(
+        self,
+        bundle_root: Path,
+        *,
+        candidate_symbols: tuple[str, ...] | None = None,
+    ) -> None:
         self.root = bundle_root.resolve()
+        self.candidate_symbols = candidate_symbols
 
     async def freeze_snapshot(
         self,
@@ -79,7 +85,11 @@ class FkqtManifestProvider:
             for dataset_type in REQUIRED_DATASETS
         }
         self._validate_volume_unit(manifests["daily_bars"])
-        self._validate_universe(rows["candidate_universe"], normalized_symbols)
+        self._validate_universe(
+            rows["candidate_universe"],
+            self.candidate_symbols or normalized_symbols,
+            manifests["candidate_universe"],
+        )
 
         next_trade_date = self._next_trade_date(rows["trading_calendar"], decision_date)
         calendar_complete_through = max(
@@ -127,8 +137,15 @@ class FkqtManifestProvider:
                 self._source_audit(
                     manifests[name],
                     decision_cutoff,
+                    strict_cutoff=(
+                        universe_manifest.request_params.get("endpoint") == "explicit"
+                    ),
                     request_scope=(
-                        {**manifests[name].request_params, "symbols": list(normalized_symbols)}
+                        {
+                            **manifests[name].request_params,
+                            "symbols": list(normalized_symbols),
+                            "candidate_symbols": list(self.candidate_symbols or normalized_symbols),
+                        }
                         if name == "candidate_universe"
                         else manifests[name].request_params
                     ),
@@ -201,17 +218,35 @@ class FkqtManifestProvider:
     def _validate_universe(
         rows: list[dict[str, object]],
         expected_symbols: tuple[str, ...],
+        manifest: DatasetManifest,
     ) -> None:
         frozen_symbols = tuple(
             sorted({str(row.get("symbol", "")).strip().upper() for row in rows})
         )
-        if not frozen_symbols or frozen_symbols != expected_symbols:
+        if not frozen_symbols or frozen_symbols != tuple(sorted(set(expected_symbols))):
             raise FkqtBundleError("UNIVERSE_SYMBOL_MISMATCH")
+        if manifest.request_params.get("endpoint") == "explicit":
+            ranks = [row.get("rank") for row in rows]
+            if (
+                any(type(rank) is not int for rank in ranks)
+                or sorted(cast(list[int], ranks)) != list(range(1, len(rows) + 1))
+            ):
+                raise FkqtBundleError("UNIVERSE_ORDER_MISMATCH")
+            ordered = tuple(
+                str(row["symbol"]).strip().upper()
+                for row in sorted(rows, key=lambda row: int(str(row["rank"])))
+            )
+            if (
+                ordered != expected_symbols
+                or manifest.request_params.get("candidate_symbols") != list(ordered)
+            ):
+                raise FkqtBundleError("UNIVERSE_ORDER_MISMATCH")
 
     @staticmethod
     def _source_audit(
         manifest: DatasetManifest,
         decision_cutoff: datetime,
+        strict_cutoff: bool,
         request_scope: Mapping[str, object],
     ) -> MarketSourceAudit:
         try:
@@ -220,11 +255,22 @@ class FkqtManifestProvider:
             raise FkqtBundleError("DATASET_MANIFEST_INVALID") from exc
         if fetched_at.tzinfo is None:
             raise FkqtBundleError("DATASET_MANIFEST_INVALID")
+        data_cutoff = decision_cutoff
+        if strict_cutoff:
+            raw_cutoff = manifest.request_params.get("data_cutoff")
+            if not isinstance(raw_cutoff, str):
+                raise FkqtBundleError("DATA_CUTOFF_INVALID")
+            try:
+                data_cutoff = datetime.fromisoformat(raw_cutoff)
+            except ValueError as exc:
+                raise FkqtBundleError("DATA_CUTOFF_INVALID") from exc
+            if data_cutoff.tzinfo is None or data_cutoff != market_close(decision_cutoff.date()):
+                raise FkqtBundleError("DATA_CUTOFF_INVALID")
         return MarketSourceAudit(
             upstream_type=manifest.source,
             upstream_version=manifest.dataset_version,
             request_scope=request_scope,
-            data_cutoff=decision_cutoff,
+            data_cutoff=data_cutoff,
             schema_version=manifest.schema_hash,
             fetched_at=fetched_at,
             record_count=manifest.row_count,

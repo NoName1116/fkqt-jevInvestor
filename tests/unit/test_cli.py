@@ -1,8 +1,10 @@
-from datetime import date, timedelta
+import json
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
-from fkqt_jevinvestor.cli.main import decision_cutoff_for_date, main
+from fkqt_jevinvestor.cli.main import decision_cutoff_for_date, main, stable_daily_run_id
 
 
 def test_version_command(capsys: pytest.CaptureFixture[str]) -> None:
@@ -122,3 +124,51 @@ def test_c_group_missing_provider_config_returns_stable_error(
 
     assert exit_code == 2
     assert capsys.readouterr().err.strip() == "C_GROUP_PROVIDER_CONFIG_REQUIRED"
+
+
+def test_daily_run_id_is_stable_and_input_bound() -> None:
+    first = stable_daily_run_id("paper-main", date(2026, 9, 24), "a" * 64, ("600000.SH",), 1, 2)
+    assert first == stable_daily_run_id(
+        "paper-main", date(2026, 9, 24), "a" * 64, ("600000.SH",), 1, 2
+    )
+    assert first != stable_daily_run_id(
+        "paper-main", date(2026, 9, 24), "b" * 64, ("600000.SH",), 1, 2
+    )
+
+
+def test_prepare_execution_freezes_raw_market_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JEV_INVESTOR_EXECUTION_BUNDLE_ROOT", str(tmp_path / "frozen"))
+    raw = tmp_path / "raw.json"
+    raw.write_text(json.dumps({
+        "600000.SH": {
+            "symbol": "600000.SH",
+            "trade_date": "2026-09-24",
+            "trading_day_status": "OPEN",
+            "trading_status": "TRADING",
+            "open_price": "10",
+            "unadjusted_close": "10.5",
+            "daily_amount_cny": "10000000",
+        }
+    }), encoding="utf-8")
+    assert main([
+        "daily", "prepare-execution", "--trade-date", "2026-09-24",
+        "--raw-file", str(raw),
+    ]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert Path(output["execution_ref"]).is_file()
+    assert output["symbol_count"] == 1
+
+
+def test_daily_execute_rejects_before_trade_date_close(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    future_date = datetime.now(UTC).date() + timedelta(days=3)
+    assert main([
+        "daily", "execute", "--trade-date", future_date.isoformat(),
+        "--portfolio-id", "paper-main", "--execution-bundle", "missing.json",
+    ]) == 2
+    assert capsys.readouterr().err.strip() == "DAILY_EXECUTE_BEFORE_CLOSE"
