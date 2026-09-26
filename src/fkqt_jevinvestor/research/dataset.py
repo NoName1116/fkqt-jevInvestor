@@ -215,10 +215,13 @@ class FrozenReplayDataProvider:
             ref.decision_date for ref in self.manifest.days if start <= ref.decision_date <= end
         )
 
-    async def warmup_dates(self, start: date, count: int) -> tuple[date, ...]:
+    def candidate_symbols(self, decision_date: date) -> tuple[str, ...]:
+        return self.research_day(decision_date).queue.ordered_symbols
+
+    async def warmup_dates(self, before: date, count: int) -> tuple[date, ...]:
         if count < 0:
             raise ValueError("RESEARCH_WARMUP_INVALID")
-        prior = tuple(ref.decision_date for ref in self.manifest.days if ref.decision_date < start)
+        prior = tuple(ref.decision_date for ref in self.manifest.days if ref.decision_date < before)
         if len(prior) < count:
             raise ValueError("RESEARCH_WARMUP_INCOMPLETE")
         return prior[-count:] if count else ()

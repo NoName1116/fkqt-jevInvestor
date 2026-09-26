@@ -151,7 +151,7 @@ A 不需要 Provider；B/C 传入 ResearchDeepSeekProvider，C/D 传入 TypeSafe
 
 同一 run_id 必须按决策日顺序生成目标，历史按完整回测配置与策略隔离。同日不同持仓记录可以单独冻结，但后续日期不得猜测采用哪个分支；请为分叉实验使用独立 run_id。已经冻结后续日期后，禁止补写此前尚未冻结的日期改变历史链。多日引擎运行必须固定完整 start/end/initial_cash 配置，不能使用 CLI 单日默认配置逐日拼接。
 
-沙耶预热接口的最终消费方式仍须合并后联合核对；本项目不修改旧协议抢占她的语义。原 ReplayDay 无公司行为权益/现金日历字段，当前适配绑定 dataset 日历，但遇到公司行为或权益明确拒绝；前向的 V2 权益账本不受影响。
+沙耶引擎已完成联合接线，warmup_dates(before,count)仅校验预热，不产生目标/成交。research ReplayProvider提供可选candidate_symbols(decision_date)，引擎据此核对queue∪held；旧无队列Provider仍按features∪held。ReplayDay完整特征和既有冻结文件hash保持不变。原 ReplayDay 无公司行为权益/现金日历字段，遇到公司行为或权益仍明确拒绝；前向V2权益账本不受影响。
 
 ## 7. 四组结果比较
 
