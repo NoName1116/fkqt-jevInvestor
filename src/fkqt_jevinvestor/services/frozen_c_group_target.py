@@ -169,7 +169,10 @@ class FrozenCGroupTargetProvider:
         day: DecisionReplayDay,
         portfolio: PortfolioState,
     ) -> TargetPositionBatch:
-        del portfolio
+        if portfolio.dividend_receivable or portfolio.dividend_income or any(
+            position.locked_bonus_quantity > 0 for position in portfolio.positions
+        ):
+            raise ValueError("LEGACY_BACKTEST_CORPORATE_ACTION_UNSUPPORTED")
         if (
             config.experiment_arm is not ExperimentArm.C_JEV_LLM
             or config.dataset_id != self._dataset_id

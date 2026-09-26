@@ -13,7 +13,7 @@ from fkqt_jevinvestor.domain.backtest import (
     ExperimentArm,
     TargetPosition,
 )
-from fkqt_jevinvestor.domain.portfolio import PortfolioState
+from fkqt_jevinvestor.domain.portfolio import PortfolioState, PositionState
 from fkqt_jevinvestor.services.frozen_c_group_target import (
     FrozenCGroupTargetProvider,
     FrozenTargetBundleV1,
@@ -70,6 +70,32 @@ def _config(dataset_id: str, dataset_hash: str, start: date, end: date) -> Backt
         execution_policy_version="execution-v1",
         sizing_version="position-sizing-v1",
     )
+
+
+@pytest.mark.asyncio
+async def test_legacy_provider_rejects_dividend_receivable(tmp_path: Path) -> None:
+    day = _day(date(2026, 9, 18), "1")
+    provider = FrozenCGroupTargetProvider(store=FrozenTargetStore(tmp_path), dataset_id="rights", content_hashes={})
+    portfolio = PortfolioState(portfolio_id="p", cash_balance=Decimal(100), frozen_cash=Decimal(0),
+                               realized_pnl=Decimal(0), version=1, dividend_receivable=Decimal(10))
+    with pytest.raises(ValueError, match="LEGACY_BACKTEST_CORPORATE_ACTION_UNSUPPORTED"):
+        await provider.build_targets(_config("rights", "a" * 64, day.decision_date, day.decision_date), day, portfolio)
+
+
+@pytest.mark.asyncio
+async def test_ordinary_t_plus_one_is_not_a_corporate_action(tmp_path: Path) -> None:
+    day = _day(date(2026, 9, 18), "1")
+    store = FrozenTargetStore(tmp_path)
+    bundle = _bundle("ordinary", "a" * 64, day)
+    store.save(bundle)
+    provider = FrozenCGroupTargetProvider(store=store, dataset_id="ordinary", content_hashes={day.decision_date: bundle.content_hash})
+    position = PositionState(symbol="600000.SH", quantity=100, sellable_quantity=0,
+                             average_cost=Decimal(10), total_cost=Decimal(1000), last_price=Decimal(10),
+                             current_position_pct=Decimal("0.5"), unrealized_pnl=Decimal(0), holding_trading_days=0)
+    portfolio = PortfolioState(portfolio_id="p", cash_balance=Decimal(1000), frozen_cash=Decimal(0),
+                               realized_pnl=Decimal(0), version=1, positions=(position,))
+    result = await provider.build_targets(_config("ordinary", "a" * 64, day.decision_date, day.decision_date), day, portfolio)
+    assert result.targets[0].symbol == "600000.SH"
 
 
 @pytest.mark.asyncio

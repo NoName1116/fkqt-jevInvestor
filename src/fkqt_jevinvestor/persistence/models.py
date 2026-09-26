@@ -62,6 +62,8 @@ class PortfolioRecord(Base):
     cash_balance: Mapped[Decimal] = mapped_column(MONEY)
     frozen_cash: Mapped[Decimal] = mapped_column(MONEY)
     realized_pnl: Mapped[Decimal] = mapped_column(MONEY)
+    dividend_receivable: Mapped[Decimal] = mapped_column(MONEY, default=Decimal(0), server_default="0")
+    dividend_income: Mapped[Decimal] = mapped_column(MONEY, default=Decimal(0), server_default="0")
     status: Mapped[str] = mapped_column(String(16))
     version: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -97,6 +99,7 @@ class PositionLotRecord(Base):
     position_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_position.id"))
     symbol: Mapped[str] = mapped_column(String(16))
     acquired_on: Mapped[date] = mapped_column(Date)
+    available_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     remaining_quantity: Mapped[int] = mapped_column(BigInteger)
     unit_cost: Mapped[Decimal] = mapped_column(COST)
     total_cost: Mapped[Decimal] = mapped_column(COST)
@@ -214,9 +217,40 @@ class PortfolioSnapshotRecord(Base):
     market_value: Mapped[Decimal] = mapped_column(MONEY)
     total_equity: Mapped[Decimal] = mapped_column(MONEY)
     realized_pnl: Mapped[Decimal] = mapped_column(MONEY)
+    dividend_receivable: Mapped[Decimal] = mapped_column(MONEY, default=Decimal(0), server_default="0")
+    dividend_income: Mapped[Decimal] = mapped_column(MONEY, default=Decimal(0), server_default="0")
     unrealized_pnl: Mapped[Decimal] = mapped_column(MONEY)
     content_hash: Mapped[str] = mapped_column(String(64))
     details_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class CorporateActionEventRecord(Base):
+    __tablename__ = "ai_signal_corporate_action_event"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_version: Mapped[str] = mapped_column(String(128), primary_key=True)
+    event_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    content_hash: Mapped[str] = mapped_column(String(64))
+
+
+class CorporateEntitlementRecord(Base):
+    __tablename__ = "ai_signal_corporate_entitlement"
+
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_version: Mapped[str] = mapped_column(String(128))
+    entitlement_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    content_hash: Mapped[str] = mapped_column(String(64))
+
+
+class CorporateStageRecord(Base):
+    __tablename__ = "ai_signal_corporate_stage"
+
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("ai_signal_portfolio.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(8), primary_key=True)
+    effective_date: Mapped[date] = mapped_column(Date)
+    processed_date: Mapped[date] = mapped_column(Date)
 
 
 class NavRecord(Base):

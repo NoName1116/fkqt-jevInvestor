@@ -8,6 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from fkqt_jevinvestor.domain.forward import TradingDayProofV1
+from fkqt_jevinvestor.domain.corporate_actions import CorporateActionManifestV1
 from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot
 
 MONEY_QUANTUM = Decimal("0.01")
@@ -32,6 +33,7 @@ class ExecuteTradeDate(BaseModel):
     market_snapshots: Mapping[str, MarketExecutionSnapshot]
     execution_input_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     execution_source_manifest_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    corporate_actions: CorporateActionManifestV1 | None = None
 
 
 class AssetIdentityError(RuntimeError):
@@ -50,6 +52,7 @@ class PositionLot:
     acquired_on: date
     remaining_quantity: int
     total_cost: Decimal
+    available_on: date | None = None
 
     @property
     def unit_cost(self) -> Decimal:
@@ -122,6 +125,8 @@ class NavState(BaseModel):
     daily_return: Decimal
     cumulative_return: Decimal
     max_drawdown: Decimal
+    dividend_receivable: Decimal = Decimal(0)
+    dividend_income: Decimal = Decimal(0)
 
 
 class PortfolioSnapshot(BaseModel):
@@ -137,6 +142,8 @@ class PortfolioSnapshot(BaseModel):
     realized_pnl: Decimal
     unrealized_pnl: Decimal
     content_hash: str
+    dividend_receivable: Decimal = Decimal(0)
+    dividend_income: Decimal = Decimal(0)
 
 
 class PortfolioLedger:
@@ -148,14 +155,18 @@ class PortfolioLedger:
         *,
         frozen_cash: Decimal = Decimal(0),
         realized_pnl: Decimal = Decimal(0),
+        dividend_receivable: Decimal = Decimal(0),
+        dividend_income: Decimal = Decimal(0),
     ) -> None:
-        if initial_cash <= 0 or cash_balance < 0 or frozen_cash < 0:
+        if initial_cash <= 0 or cash_balance < 0 or frozen_cash < 0 or dividend_receivable < 0 or dividend_income < 0:
             raise ValueError("portfolio cash values are invalid")
         self.portfolio_id = portfolio_id
         self.initial_cash = initial_cash.quantize(MONEY_QUANTUM)
         self.cash_balance = cash_balance.quantize(MONEY_QUANTUM)
         self.frozen_cash = frozen_cash.quantize(MONEY_QUANTUM)
         self.realized_pnl = realized_pnl.quantize(MONEY_QUANTUM)
+        self.dividend_receivable = dividend_receivable.quantize(MONEY_QUANTUM)
+        self.dividend_income = dividend_income.quantize(MONEY_QUANTUM)
         self._positions: dict[str, LedgerPosition] = {}
         self._nav: list[NavState] = []
         self._peak_equity = self.initial_cash
@@ -187,7 +198,7 @@ class PortfolioLedger:
             if price <= 0:
                 raise ValueError(f"missing valuation price for {symbol}")
             market_value += price * position.quantity
-        return (self.cash_balance + market_value).quantize(MONEY_QUANTUM, ROUND_HALF_UP)
+        return (self.cash_balance + market_value + self.dividend_receivable).quantize(MONEY_QUANTUM, ROUND_HALF_UP)
 
     def buy(
         self,
@@ -221,7 +232,7 @@ class PortfolioLedger:
         return sum(
             item.remaining_quantity
             for item in position.lots
-            if item.acquired_on < trade_date
+            if item.acquired_on < trade_date and (item.available_on is None or item.available_on <= trade_date)
         )
 
     def sell_fifo(
@@ -241,7 +252,7 @@ class PortfolioLedger:
         remaining = quantity
         cost_basis = Decimal(0)
         for item in sorted(position.lots, key=lambda lot: lot.acquired_on):
-            if item.acquired_on >= trade_date or remaining == 0:
+            if item.acquired_on >= trade_date or remaining == 0 or (item.available_on is not None and item.available_on > trade_date):
                 continue
             consumed = min(remaining, item.remaining_quantity)
             cost_basis += item.consume(consumed)
@@ -282,7 +293,7 @@ class PortfolioLedger:
             (item.unrealized_pnl for item in self._positions.values()),
             Decimal(0),
         ).quantize(MONEY_QUANTUM)
-        total_equity = (self.cash_balance + market_value).quantize(MONEY_QUANTUM)
+        total_equity = (self.cash_balance + market_value + self.dividend_receivable).quantize(MONEY_QUANTUM)
         previous_equity = self._nav[-1].total_equity if self._nav else self.initial_cash
         daily_return = (total_equity / previous_equity - 1).quantize(RATIO_QUANTUM)
         cumulative_return = (total_equity / self.initial_cash - 1).quantize(RATIO_QUANTUM)
@@ -300,6 +311,8 @@ class PortfolioLedger:
             daily_return=daily_return,
             cumulative_return=cumulative_return,
             max_drawdown=self._max_drawdown,
+            dividend_receivable=self.dividend_receivable,
+            dividend_income=self.dividend_income,
         )
         self._nav.append(nav)
         self.assert_asset_identity()
@@ -315,7 +328,7 @@ class PortfolioLedger:
             (item.market_value for item in self._positions.values()),
             Decimal(0),
         ).quantize(MONEY_QUANTUM)
-        calculated = (self.cash_balance + market_value).quantize(MONEY_QUANTUM)
+        calculated = (self.cash_balance + market_value + self.dividend_receivable).quantize(MONEY_QUANTUM)
         reported = reported_total_equity
         if reported is None:
             reported = self._nav[-1].total_equity if self._nav else calculated
@@ -331,7 +344,7 @@ class PortfolioLedger:
             (item.unrealized_pnl for item in self._positions.values()),
             Decimal(0),
         ).quantize(MONEY_QUANTUM)
-        total_equity = (self.cash_balance + market_value).quantize(MONEY_QUANTUM)
+        total_equity = (self.cash_balance + market_value + self.dividend_receivable).quantize(MONEY_QUANTUM)
         payload = {
             "portfolio_id": self.portfolio_id,
             "snapshot_type": snapshot_type,
@@ -344,6 +357,10 @@ class PortfolioLedger:
             "unrealized_pnl": str(unrealized),
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        if self.dividend_receivable or self.dividend_income:
+            payload["dividend_receivable"] = str(self.dividend_receivable)
+            payload["dividend_income"] = str(self.dividend_income)
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return PortfolioSnapshot(
             portfolio_id=self.portfolio_id,
             snapshot_type=snapshot_type,
@@ -355,4 +372,6 @@ class PortfolioLedger:
             realized_pnl=self.realized_pnl,
             unrealized_pnl=unrealized,
             content_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            dividend_receivable=self.dividend_receivable,
+            dividend_income=self.dividend_income,
         )

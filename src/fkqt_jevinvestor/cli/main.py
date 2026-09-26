@@ -3,7 +3,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -135,6 +135,15 @@ def _prepare_execution(args: argparse.Namespace, settings: Settings) -> int:
             raw = Path(args.raw_file).read_text(encoding="utf-8")
             snapshots = TypeAdapter(dict[str, MarketExecutionSnapshot]).validate_json(raw)
             bundle = ExecutionBundleV1.create(args.trade_date, snapshots)
+        corporate_root = getattr(args, "corporate_action_manifest", None)
+        if corporate_root is not None:
+            from fkqt_jevinvestor.ingestion.fkqt_corporate_action_manifest import load_corporate_actions
+
+            if not isinstance(bundle, ExecutionBundleV2):
+                raise ValueError("CORPORATE_ACTION_REQUIRES_EXECUTION_V2")
+            actions = load_corporate_actions(Path(corporate_root), args.trade_date, datetime.now(UTC))
+            if bundle.corporate_action_manifest_hash != actions.source_content_hash:
+                raise ValueError("CORPORATE_ACTION_HASH_MISMATCH")
         path = ExecutionBundleStore(settings.execution_bundle_root).save(bundle)
     except FkqtBundleError as exc:
         print(str(exc), file=sys.stderr)
@@ -165,14 +174,20 @@ def _write_required_symbols_file(output: Path, content: str) -> None:
 async def _daily_required_symbols(args: argparse.Namespace, settings: Settings) -> int:
     engine = create_engine(settings.database_url)
     try:
-        repository = PortfolioRepository(create_session_factory(engine))
+        session_factory = create_session_factory(engine)
+        repository = PortfolioRepository(session_factory)
         state = await repository.get_state(args.portfolio_id, as_of=args.trade_date)
         pending = await repository.load_pending_orders_through(
             args.portfolio_id, args.trade_date
         )
+        from fkqt_jevinvestor.persistence.corporate_action_repository import CorporateActionRepository
+
+        async with session_factory() as session:
+            rights_symbols = await CorporateActionRepository().required_symbols(session, args.portfolio_id)
         symbols = tuple(sorted(
             {item.symbol for item in state.positions if item.quantity > 0}
             | {item.symbol for item in pending}
+            | rights_symbols
         ))
         output = Path(args.output_file)
         content = "".join(f"{symbol}\n" for symbol in symbols)
@@ -346,13 +361,7 @@ async def _run_c_group(
             )
             for symbol in required_symbols
         }
-        total_equity = portfolio.cash_balance + sum(
-            (
-                position.last_price * position.quantity
-                for position in portfolio.positions
-            ),
-            Decimal(0),
-        )
+        total_equity = portfolio.total_equity
         decision_provider_version = "deepseek-responses-v1"
         queue = getattr(args, "candidate_queue_data", None)
         if isinstance(queue, CandidateQueueV1):
@@ -538,11 +547,15 @@ async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
                         ).limit(1)
                     )
                 if not due and scheduled is None and not (
-                    isinstance(bundle, ExecutionBundleV2) and not bundle.snapshots
+                    isinstance(bundle, ExecutionBundleV2)
                 ):
                     raise ValueError("DAILY_EXECUTION_NOT_SCHEDULED")
                 required = {item.symbol for item in state.positions if item.quantity > 0}
                 required.update(item.symbol for item in open_orders)
+                from fkqt_jevinvestor.persistence.corporate_action_repository import CorporateActionRepository
+
+                async with session_factory() as session:
+                    required.update(await CorporateActionRepository().required_symbols(session, args.portfolio_id))
             bundle.verify(args.trade_date, required)
             frozen_path = ExecutionBundleStore(settings.execution_bundle_root).save(bundle)
             command = ExecuteTradeDate(
@@ -552,6 +565,7 @@ async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
                     market_snapshots=bundle.snapshots,
                     execution_input_hash=bundle.content_hash,
                     execution_source_manifest_id=bundle.source_manifest_id,
+                    corporate_actions=bundle.corporate_actions if isinstance(bundle, ExecutionBundleV2) else None,
                 )
             if isinstance(bundle, ExecutionBundleV2) and not bundle.snapshots:
                 start_date = getattr(args, "start_date", None)
@@ -689,6 +703,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare_source = prepare_parser.add_mutually_exclusive_group(required=True)
     prepare_source.add_argument("--raw-file")
     prepare_source.add_argument("--manifest-root")
+    prepare_parser.add_argument("--corporate-action-manifest")
     required_parser = daily_subparsers.add_parser("required-symbols")
     required_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
     required_parser.add_argument("--portfolio-id", required=True)

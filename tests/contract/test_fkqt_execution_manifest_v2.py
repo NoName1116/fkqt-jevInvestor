@@ -27,8 +27,10 @@ import sys
 from market_data.execution_publisher_v2 import publish_execution_bundle_v2
 from market_data.store import LocalMarketDataStore
 from tests.test_execution_publisher_v2 import client
+from tests.test_execution_publisher_v2 import test_v2_binds_corporate_events_before_accepting_bonus_context
 for name, scope in [('empty', ()), ('normal', ('600000.SH',))]:
     publish_execution_bundle_v2(client(), LocalMarketDataStore(Path(sys.argv[1])/name), trade_date='20260925', symbols=scope)
+test_v2_binds_corporate_events_before_accepting_bonus_context(Path(sys.argv[1])/'corporate')
 """
     outcome = subprocess.run(
         [str(interpreter), "-c", script, str(tmp_path)], cwd=publisher_root,
@@ -41,6 +43,9 @@ for name, scope in [('empty', ()), ('normal', ('600000.SH',))]:
     assert empty.calendar_proof.previous_trade_date == date(2026, 9, 24)
     normal = load_fkqt_execution_manifest_v2(tmp_path / "normal", date(2026, 9, 25), {"600000.SH"})
     assert str(normal.snapshots["600000.SH"].daily_amount_cny) == "10000000"
+    corporate = load_fkqt_execution_manifest_v2(tmp_path / "corporate/with-rights", date(2026, 9, 25), {"600000.SH"})
+    assert corporate.corporate_actions is not None
+    assert str(corporate.corporate_actions.events[0].bonus_ratio) == "0.1"
     calendar_path = next((tmp_path / "empty/calendar/manifests").glob("*.json"))
     manifest = json.loads(calendar_path.read_text(encoding="utf-8"))
     parquet = tmp_path / "empty/calendar" / manifest["storage_path"]

@@ -1,6 +1,6 @@
 import hashlib
 from collections.abc import Mapping
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -91,10 +91,15 @@ def load_fkqt_execution_manifest_v2(
     elif manifest.request_params.get("symbols") != [] or required_symbols:
         raise FkqtBundleError("EXECUTION_SYMBOL_COVERAGE_INCOMPLETE")
     action_hash = manifest.request_params.get("corporate_action_manifest_hash")
+    actions = None
     if action_hash is not None:
-        # T9 接入事件后再接受新权益输入；不能把未消费事件的包用于净值。
-        raise FkqtBundleError("CORPORATE_ACTION_UNSUPPORTED")
+        from fkqt_jevinvestor.ingestion.fkqt_corporate_action_manifest import load_corporate_actions
+
+        actions = load_corporate_actions(root / "corporate_actions", trade_date, datetime.now(UTC))
+        if action_hash != actions.source_content_hash:
+            raise FkqtBundleError("CORPORATE_ACTION_HASH_MISMATCH")
     return ExecutionBundleV2.create(
         trade_date, snapshots, calendar_proof=proof,
         source_manifest_id=manifest.dataset_id, source_manifest_content_hash=manifest.content_hash,
+        corporate_action_manifest_hash=action_hash, corporate_actions=actions,
     )

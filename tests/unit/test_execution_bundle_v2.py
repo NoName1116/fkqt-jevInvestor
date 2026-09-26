@@ -81,3 +81,10 @@ def test_v2_store_roundtrip_and_origin_tamper(tmp_path: Path) -> None:
     }), encoding="utf-8")
     with pytest.raises(ValueError, match="EXECUTION_SOURCE_CONFLICT"):
         load_execution_bundle(path)
+
+
+def test_corporate_action_hash_requires_frozen_events() -> None:
+    with pytest.raises(ValueError, match="CORPORATE_ACTION_MANIFEST_REQUIRED"):
+        ExecutionBundleV2.create(DAY, {}, calendar_proof=proof(), source_manifest_id="c" * 64,
+                                 source_manifest_content_hash="d" * 64,
+                                 corporate_action_manifest_hash="e" * 64)

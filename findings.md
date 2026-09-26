@@ -239,3 +239,12 @@
 - 真实来源历史数据的抓取时间不等于历史可用时间，不能用今天抓取的资料自动宣称严格 Point-in-Time 回测或前向。
 - 来源复用：既有 ExecutionBundleV1、PortfolioLedger、FKQT execution_publisher；官方 Tushare dividend 文档 https://tushare.pro/document/2?doc_id=103；Python subprocess 与 Microsoft Task Scheduler 官方文档见已批准设计。没有增加新框架或 SDK。
 - 当前未读取 Secret 值、未做外部 API 调用、未安装系统任务、未发送 Webhook。接下来先等待实施计划审阅，不将设计批准冒充代码完成。
+
+## 2026-09-26 实施发现
+
+- 共享 JEV 虚拟环境 editable 指向旧主工作树；定点测试必须显式设置本工作树 `src` 为 PYTHONPATH。FKQT 使用 `C:/Users/1/Desktop/FKQT-pro/agent/.venv-codex/Scripts/python.exe`，未安装重复依赖。
+- Windows 默认 pytest 临时目录存在 ACL 故障，使用工作树 `data/test-runs/` 下每次独立目录，不删除用户旧临时目录。
+- 公司行为覆盖事实的抓取时间也须不晚于 cutoff；只有事件披露时间早于 cutoff 不足以证明当时已完整采集。
+- 同取得日的多个 FIFO Lot 不能逐权益分配重复匹配全部持仓成本；按取得日聚合红股数量后一次分摊，手算 20000 成本送 200 股对应红股成本 1818.18181818，新增回归已验证。
+- 公司行为 Repository 不自行 commit，登记、应收、派息和锁定 Lot 与成交/NAV 共用原事务；权益 Lot 保存内容快照，不引用替换删除的数据库 Lot ID。
+- Tushare dividend 单请求达到 2000 行时拒绝覆盖完整性，不假设不存在的分页参数；真实权限探测尚未运行。
