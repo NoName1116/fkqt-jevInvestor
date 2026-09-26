@@ -1,8 +1,20 @@
 # fkqt-jevInvestor 当前任务计划
 
-日期：2026-09-23
+日期：2026-09-26
 
-当前阶段：FKQT → fkqt-jevInvestor Tushare 前向行情桥接验收
+当前阶段：事项 2–6 前向运行补齐；设计已批准，实施计划等待审阅
+
+## 2026-09-26 当前执行队列
+
+| 顺序 | 内容 | 需求 | 计划 | 状态 |
+|---|---|---|---|---|
+| F1 | 空仓执行 V2、零成交 NAV、候选队列版本及自动读取 | R54/R55/R59 | docs/superpowers/plans/2026-09-26-forward-market-foundation.md，T1–T5 | 待实施计划批准 |
+| F2 | 公司行为 Manifest、登记权益、税前应收、红股及原子入账 | R58–R60 | docs/superpowers/plans/2026-09-26-forward-corporate-actions.md，T6–T9 | 待 F1 |
+| F3 | 安全进程、外部运行编排、有限重试、恢复与告警 | R57 | docs/superpowers/plans/2026-09-26-forward-operations.md，T10–T12 | 待 F2 |
+| F4 | 七项 Tushare 权限、真实 Jev/DeepSeek、小队列验收 | R56/R60 | 同上，T13 | 待代码与实际凭据；真实前向需未来交易日 |
+| F5 | 阶段最终测试、迁移、Secret 扫描、审查及交付 | R33/R32/R59 | 同上，T14 | 待 F1–F4 |
+
+用户已确认税前模拟及不支持公司行为时停止的设计。不自动安装系统任务，不触碰沙耶目录；PR 审核合并仍是独立工作。
 
 | 步骤 | 内容 | 输入 | 输出 | 状态 |
 |---|---|---|---|---|

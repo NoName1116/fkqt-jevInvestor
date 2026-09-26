@@ -229,3 +229,13 @@
 11. 前向决策 Manifest 的 `data_cutoff` 为交易日 15:00 的行情观察截止点，`fetched_at` 独立记录实际抓取时间。两者无法证明 Tushare 后续未修订历史数据，故不能把此文件桥接宣称为严格历史 point-in-time 数据源。
 12. 执行包来源侧文件现在对手工与 FKQT 路径均不可变；新 FKQT 包的哈希绑定来源文件必需标记和具体来源 ID/哈希，加载时缺失或不匹配均拒绝。执行时把 `source_manifest_id` 写入 `POST_EXECUTION` 审计并用于同日幂等冲突判断。旧无来源侧文件的手工包仍可读取。
 13. 本项目契约测试加入 FKQT 发布器 FakeClient 实际生成的固定 Manifest/Parquet 金样本；运行时仍不导入 FKQT 包。
+# 2026-09-26 事项 2–6 设计确认与计划
+
+- 用户已确认 forward-operations-design：新增 R54–R60，税务 GROSS_V1，未支付应收不可用于买入，未知公司行为整日停止。
+- 三份实施计划分开覆盖基础行情 T1–T5、公司行为 T6–T9、运行及 live 验证 T10–T14；待用户审阅执行方式，没有改产品代码。
+- 两个仓库均已有 linked worktree，tracked 修改开始前为空；JEV 主仓库共享 Python 解释器存在，FKQT 专用解释器尚未确定。
+- 当前 daily_execute 要求排期，V1 空字典拒绝；新首日现金路径需显式 start_date，不能只删空包校验。
+- PositionLotRecord 在执行后替换重建，权益不能引用会删除的原 Lot ID，应保存登记 Lot 内容快照。
+- 真实来源历史数据的抓取时间不等于历史可用时间，不能用今天抓取的资料自动宣称严格 Point-in-Time 回测或前向。
+- 来源复用：既有 ExecutionBundleV1、PortfolioLedger、FKQT execution_publisher；官方 Tushare dividend 文档 https://tushare.pro/document/2?doc_id=103；Python subprocess 与 Microsoft Task Scheduler 官方文档见已批准设计。没有增加新框架或 SDK。
+- 当前未读取 Secret 值、未做外部 API 调用、未安装系统任务、未发送 Webhook。接下来先等待实施计划审阅，不将设计批准冒充代码完成。
