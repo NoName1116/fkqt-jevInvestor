@@ -75,6 +75,7 @@ class MarketPipeline:
                 single_symbol_features[symbol] = build_market_feature_snapshot(
                     bars,
                     snapshot.content_hash,
+                    float_shares=bars[-1].float_shares_in_volume_units,
                 )
         features, _coverage = apply_cross_sectional_features(single_symbol_features)
         await self._repository.save_run_inputs(snapshot, features, str(storage_path))

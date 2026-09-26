@@ -1,4 +1,5 @@
 import asyncio
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -7,10 +8,10 @@ from alembic import command
 from alembic.config import Config
 
 from fkqt_jevinvestor.persistence.corporate_action_repository import CorporateActionRepository
+from fkqt_jevinvestor.persistence.models import CorporateStageRecord, PortfolioRecord
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.services.portfolio_service import CreatePortfolio, ExecuteTradeDate
-from fkqt_jevinvestor.persistence.models import PortfolioRecord
 from tests.integration.test_cash_only_daily import cash_command
 from tests.unit.test_corporate_action_ledger import EX, PAY, event, ledger
 
@@ -47,6 +48,34 @@ async def test_entitlements_survive_sellout_and_stage_replay(tmp_path: Path) -> 
         async with factory.begin() as session:
             assert not await repository.has_outstanding_entitlements(session, "p")
             assert await repository.required_symbols(session, "p") == set()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_nontrading_payment_keeps_original_effective_date(tmp_path: Path) -> None:
+    url = f"sqlite+aiosqlite:///{(tmp_path / 'weekend.db').as_posix()}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", url)
+    await asyncio.to_thread(command.upgrade, config, "head")
+    engine = create_engine(url)
+    factory = create_session_factory(engine)
+    try:
+        await PortfolioRepository(factory).create(CreatePortfolio(portfolio_id="p", name="Rights"))
+        repository = CorporateActionRepository()
+        account = ledger()
+        evt = event().model_copy(update={"pay_date": date(2026, 9, 26)})
+        async with factory.begin() as session:
+            await repository.freeze_record_date(session, "p", evt, account)
+            await repository.apply_due_stages(session, "p", EX, account)
+        async with factory.begin() as session:
+            assert await repository.apply_due_stages(session, "p", PAY, account) == ("PAY",)
+            stage = await session.get(CorporateStageRecord, ("p", evt.event_id, "PAY"))
+            assert stage is not None
+            assert stage.effective_date == date(2026, 9, 26)
+            assert stage.processed_date == PAY
+        assert account.dividend_receivable == 0
+        assert account.dividend_income == Decimal(200)
     finally:
         await engine.dispose()
 

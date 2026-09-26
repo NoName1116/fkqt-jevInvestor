@@ -213,6 +213,8 @@ class FkqtManifestProvider:
     def _validate_volume_unit(manifest: DatasetManifest) -> None:
         if manifest.request_params.get("volume_unit") != "TUSHARE_100_SHARES":
             raise FkqtBundleError("DAILY_VOLUME_UNIT_MISMATCH")
+        if manifest.request_params.get("float_share_unit") not in {None, "TUSHARE_10000_SHARES"}:
+            raise FkqtBundleError("FLOAT_SHARE_UNIT_MISMATCH")
 
     @staticmethod
     def _validate_universe(
@@ -333,6 +335,11 @@ class FkqtManifestProvider:
                         * Decimal(1000)
                     ),
                     adjustment_mode=AdjustmentMode.NONE,
+                    # 原始股本为万股，成交量为百股；统一为百股后计算百分数。
+                    float_shares_in_volume_units=(
+                        _decimal(row["float_share"], "FLOAT_SHARES_INVALID") * Decimal(100)
+                        if row.get("float_share") is not None else None
+                    ),
                 )
             )
         return {

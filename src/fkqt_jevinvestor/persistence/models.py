@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     Numeric,
@@ -50,6 +51,37 @@ class SchemaVersionRecord(Base):
 MONEY = Numeric(20, 4)
 COST = Numeric(24, 8)
 RATIO = Numeric(12, 8)
+
+
+class ForwardLeaseRecord(Base):
+    __tablename__ = "ai_signal_forward_lease"
+    portfolio_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[float] = mapped_column(Float)
+
+
+class ForwardStageRecord(Base):
+    __tablename__ = "ai_signal_forward_stage"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(String(40))
+    trade_date: Mapped[date] = mapped_column(Date)
+    stage: Mapped[str] = mapped_column(String(32))
+    config_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    attempts: Mapped[int] = mapped_column(Integer)
+    next_retry_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    outcome_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ForwardAlertRecord(Base):
+    __tablename__ = "ai_signal_forward_alert"
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    local_written: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class PortfolioRecord(Base):

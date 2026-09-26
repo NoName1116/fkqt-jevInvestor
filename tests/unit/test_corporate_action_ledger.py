@@ -4,7 +4,10 @@ from decimal import Decimal
 import pytest
 
 from fkqt_jevinvestor.domain.corporate_actions import CorporateActionEventV1
-from fkqt_jevinvestor.services.corporate_action_ledger import apply_entitlement_stage, freeze_entitlement
+from fkqt_jevinvestor.services.corporate_action_ledger import (
+    apply_entitlement_stage,
+    freeze_entitlement,
+)
 from fkqt_jevinvestor.services.portfolio_service import PortfolioLedger
 
 RECORD = date(2026, 9, 24)
@@ -82,7 +85,7 @@ def test_same_day_lots_share_one_bonus_cost_allocation() -> None:
     bonus_cost = sum((lot.total_cost for lot in account.position(evt.symbol).lots
                       if lot.available_on == LIST), Decimal(0))
     assert bonus_cost == Decimal("1818.18181818")
-    assert account.position(evt.symbol).total_cost == Decimal("20000")
+    assert account.position(evt.symbol).total_cost == Decimal(20000)
 
 
 def test_receivable_state_preserves_old_payload_and_new_equity() -> None:

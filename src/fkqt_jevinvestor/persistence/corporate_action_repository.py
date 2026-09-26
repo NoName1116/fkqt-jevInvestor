@@ -5,8 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fkqt_jevinvestor.domain.corporate_actions import CorporateActionEventV1, EntitlementV1
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
-from fkqt_jevinvestor.persistence.models import CorporateActionEventRecord, CorporateEntitlementRecord, CorporateStageRecord
-from fkqt_jevinvestor.services.corporate_action_ledger import apply_entitlement_stage, freeze_entitlement
+from fkqt_jevinvestor.persistence.models import (
+    CorporateActionEventRecord,
+    CorporateEntitlementRecord,
+    CorporateStageRecord,
+)
+from fkqt_jevinvestor.services.corporate_action_ledger import (
+    apply_entitlement_stage,
+    freeze_entitlement,
+)
 from fkqt_jevinvestor.services.portfolio_service import PortfolioLedger
 
 

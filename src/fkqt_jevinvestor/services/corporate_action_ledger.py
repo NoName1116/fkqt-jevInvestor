@@ -2,10 +2,15 @@ from datetime import date
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, localcontext
 
 from fkqt_jevinvestor.domain.corporate_actions import (
-    CorporateActionEventV1, EntitlementLotV1, EntitlementV1,
+    CorporateActionEventV1,
+    EntitlementLotV1,
+    EntitlementV1,
 )
 from fkqt_jevinvestor.services.portfolio_service import (
-    COST_QUANTUM, MONEY_QUANTUM, PortfolioLedger, PositionLot,
+    COST_QUANTUM,
+    MONEY_QUANTUM,
+    PortfolioLedger,
+    PositionLot,
 )
 
 

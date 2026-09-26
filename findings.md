@@ -248,3 +248,13 @@
 - 同取得日的多个 FIFO Lot 不能逐权益分配重复匹配全部持仓成本；按取得日聚合红股数量后一次分摊，手算 20000 成本送 200 股对应红股成本 1818.18181818，新增回归已验证。
 - 公司行为 Repository 不自行 commit，登记、应收、派息和锁定 Lot 与成交/NAV 共用原事务；权益 Lot 保存内容快照，不引用替换删除的数据库 Lot ID。
 - Tushare dividend 单请求达到 2000 行时拒绝覆盖完整性，不假设不存在的分页参数；真实权限探测尚未运行。
+
+## 2026-09-26 真实验证与最终验收更新
+
+- 九项权限/模型合成契约实际 AVAILABLE；DeepSeek 旧 chat 的成功不算版本升级证据，显式 flash 契约通过。官方发布：[V4.1 Flash](https://api-docs.deepseek.com/news/news260910/)。
+- 2026-09-25 daily/stk_limit 合法空响应只证明接口可访问，不能证明当日行情齐备。两证券共同已观察日期为 2026-09-24，只运行 REAL_SOURCE_REPLAY；未做未来连续交易日验证。
+- SQL 查实第一次历史运行个股均 DATA_UNAVAILABLE，唯一必要缺失为 FLOAT_SHARES_UNAVAILABLE。补上 daily_basic.float_share 并保留单位元数据；万股转百股匹配成交量后由原公式算换手百分数，旧 None 字段不改变 canonical hash。[官方字段与权限](https://tushare.pro/document/2?doc_id=32)。
+- 股本完整后的真实单日，UNIVERSE AVAILABLE、两 SYMBOL CONTRACT_INVALID、两 LLM NO_SIGNAL；NAV=1、订单=0。单股另一次只读诊断的五问契约通过，说明真实返回可能变化，不能覆盖原失败记录或保证下一次成功；没有放宽概率/标签校验。
+- VERIFY 原来未拦 DATA_UNAVAILABLE，真实持久决策集成测试 RED→GREEN 修正；数据与 Provider 任一不足均 DEGRADED。
+- Windows Interactive Task 仅登录时运行。安装 -WhatIf 和内存 XML（5 分钟、105 分钟、IgnoreNew）已验证，未调用 Register-ScheduledTask。
+- 首次完整离线 368 passed/2 failed；迁移旧 head 断言及 NAV 新旧 JSON 返回差异已修，定点 3 passed。第三方 2 项弃用 warning 不改变运行结果，不在本范围升级依赖。

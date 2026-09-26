@@ -13,6 +13,9 @@
 - 虚拟执行与状态：`fkqt-jevinvestor daily execute`、`fkqt-jevinvestor daily status`
 - 运行说明：[`docs/runbooks/c-group-decisions.md`](docs/runbooks/c-group-decisions.md)
 - 日频运行说明：[`docs/runbooks/daily-runner.md`](docs/runbooks/daily-runner.md)
+- 外部一次性编排：`fkqt-jevinvestor forward run`、`forward status`、`forward validate`。
+- 前向、权益和调度完整手册：[`docs/runbooks/forward-operations.md`](docs/runbooks/forward-operations.md)。
+- 本阶段实际验收边界：[`docs/validation/2026-09-26-forward-operations.md`](docs/validation/2026-09-26-forward-operations.md)。
 - 回测接入：`FrozenCGroupTargetProvider` 只读取内容寻址冻结目标，不调用外部模型或数据库。
 
-默认决策模型为 `deepseek-flash`，推理强度为 `high`。API Key 只能通过环境变量临时注入，不得写入仓库、命令历史、日志或数据库。
+默认决策模型为 `deepseek-flash`，推理强度为 `high`。API Key 只从本地未跟踪 `.env` 或进程环境加载，不得写入 Git、命令历史、日志或数据库。调度脚本未自动安装；真实历史来源重放不等于持续前向，真实 Provider 不合约时保留 NO_SIGNAL 并降级。

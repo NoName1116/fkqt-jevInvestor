@@ -4,11 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
-from fkqt_jevinvestor.domain.forward import TradingDayProofV1
 from fkqt_jevinvestor.domain.corporate_actions import CorporateActionManifestV1
+from fkqt_jevinvestor.domain.forward import TradingDayProofV1
 from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot
 
 MONEY_QUANTUM = Decimal("0.01")
@@ -127,6 +128,14 @@ class NavState(BaseModel):
     max_drawdown: Decimal
     dividend_receivable: Decimal = Decimal(0)
     dividend_income: Decimal = Decimal(0)
+
+    @model_serializer(mode="wrap")
+    def serialize_compatible(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload = handler(self)
+        for name in ("dividend_receivable", "dividend_income"):
+            if getattr(self, name) == 0:
+                payload.pop(name, None)
+        return payload
 
 
 class PortfolioSnapshot(BaseModel):

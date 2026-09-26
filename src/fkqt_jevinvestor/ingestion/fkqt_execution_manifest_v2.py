@@ -91,6 +91,8 @@ def load_fkqt_execution_manifest_v2(
     elif manifest.request_params.get("symbols") != [] or required_symbols:
         raise FkqtBundleError("EXECUTION_SYMBOL_COVERAGE_INCOMPLETE")
     action_hash = manifest.request_params.get("corporate_action_manifest_hash")
+    if action_hash is not None and not isinstance(action_hash, str):
+        raise FkqtBundleError("CORPORATE_ACTION_HASH_MISMATCH")
     actions = None
     if action_hash is not None:
         from fkqt_jevinvestor.ingestion.fkqt_corporate_action_manifest import load_corporate_actions

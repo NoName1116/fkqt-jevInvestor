@@ -1,11 +1,16 @@
 import re
 from datetime import date, datetime
-
 from pathlib import Path
+from typing import cast
 
-from fkqt_jevinvestor.domain.corporate_actions import CorporateActionEventV1, CorporateActionManifestV1
+from fkqt_jevinvestor.domain.corporate_actions import (
+    CorporateActionEventV1,
+    CorporateActionManifestV1,
+)
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
-from fkqt_jevinvestor.ingestion.fkqt_execution_manifest_v2 import _read_dataset  # pyright: ignore[reportPrivateUsage]
+from fkqt_jevinvestor.ingestion.fkqt_execution_manifest_v2 import (
+    _read_dataset,  # pyright: ignore[reportPrivateUsage]
+)
 from fkqt_jevinvestor.ingestion.fkqt_manifest import FkqtBundleError
 
 
@@ -27,7 +32,7 @@ def load_corporate_actions(root: Path, trade_date: date, cutoff: datetime) -> Co
             or manifest.request_params.get("coverage_complete") is not True
             or manifest.request_params.get("checked_symbols") != requested):
         raise FkqtBundleError("CORPORATE_ACTION_COVERAGE_INCOMPLETE")
-    symbols = tuple(str(item) for item in requested)
+    symbols = tuple(str(item) for item in cast(list[object], requested))
     if len(set(symbols)) != len(symbols) or any(re.fullmatch(r"\d{6}\.(SH|SZ)", s) is None for s in symbols):
         raise FkqtBundleError("CORPORATE_ACTION_SYMBOL_MISMATCH")
     try:

@@ -137,7 +137,9 @@ def _prepare_execution(args: argparse.Namespace, settings: Settings) -> int:
             bundle = ExecutionBundleV1.create(args.trade_date, snapshots)
         corporate_root = getattr(args, "corporate_action_manifest", None)
         if corporate_root is not None:
-            from fkqt_jevinvestor.ingestion.fkqt_corporate_action_manifest import load_corporate_actions
+            from fkqt_jevinvestor.ingestion.fkqt_corporate_action_manifest import (
+                load_corporate_actions,
+            )
 
             if not isinstance(bundle, ExecutionBundleV2):
                 raise ValueError("CORPORATE_ACTION_REQUIRES_EXECUTION_V2")
@@ -180,7 +182,9 @@ async def _daily_required_symbols(args: argparse.Namespace, settings: Settings) 
         pending = await repository.load_pending_orders_through(
             args.portfolio_id, args.trade_date
         )
-        from fkqt_jevinvestor.persistence.corporate_action_repository import CorporateActionRepository
+        from fkqt_jevinvestor.persistence.corporate_action_repository import (
+            CorporateActionRepository,
+        )
 
         async with session_factory() as session:
             rights_symbols = await CorporateActionRepository().required_symbols(session, args.portfolio_id)
@@ -552,7 +556,9 @@ async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
                     raise ValueError("DAILY_EXECUTION_NOT_SCHEDULED")
                 required = {item.symbol for item in state.positions if item.quantity > 0}
                 required.update(item.symbol for item in open_orders)
-                from fkqt_jevinvestor.persistence.corporate_action_repository import CorporateActionRepository
+                from fkqt_jevinvestor.persistence.corporate_action_repository import (
+                    CorporateActionRepository,
+                )
 
                 async with session_factory() as session:
                     required.update(await CorporateActionRepository().required_symbols(session, args.portfolio_id))
@@ -670,6 +676,18 @@ async def _daily_status(args: argparse.Namespace, settings: Settings) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fkqt-jevinvestor")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    forward_parser = subparsers.add_parser("forward")
+    forward_commands = forward_parser.add_subparsers(dest="forward_command", required=True)
+    for name in ("run", "status", "validate", "init"):
+        command_parser = forward_commands.add_parser(name)
+        command_parser.add_argument("--config", required=True)
+        if name != "init":
+            command_parser.add_argument("--date", dest="trade_date", type=date.fromisoformat, required=True)
+        if name == "init":
+            command_parser.add_argument("--initial-cash", type=Decimal, default=Decimal(1000000))
+        if name == "validate":
+            command_parser.add_argument("--mode", choices=("PROVIDER_CONTRACT", "REAL_SOURCE_REPLAY", "LIVE_FORWARD"), required=True)
+            command_parser.add_argument("--live", action="store_true")
     subparsers.add_parser("version")
     market_parser = subparsers.add_parser("market")
     market_subparsers = market_parser.add_subparsers(dest="market_command", required=True)
@@ -722,6 +740,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     status_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
     status_parser.add_argument("--portfolio-id", required=True)
     args = parser.parse_args(argv)
+    if args.command == "forward":
+        from fkqt_jevinvestor.operations.cli import execute_forward
+
+        return asyncio.run(execute_forward(args))
     if args.command == "version":
         print("fkqt-jevinvestor 0.1.0")
         return 0

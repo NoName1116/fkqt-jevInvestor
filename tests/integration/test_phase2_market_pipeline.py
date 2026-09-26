@@ -111,6 +111,18 @@ class FakeProvider:
 
 
 @pytest.mark.asyncio
+async def test_pipeline_uses_frozen_float_shares_for_turnover(session_factory: SessionFactory, tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    bars = snapshot.daily_bars["600000.SH"]
+    latest = DailyBar.model_validate({**bars[-1].model_dump(), "float_shares_in_volume_units": "100000"})
+    snapshot = snapshot.model_copy(update={"daily_bars": {"600000.SH": (*bars[:-1], latest)}})
+    snapshot = snapshot.model_copy(update={"content_hash": sha256_json(snapshot.model_copy(update={"content_hash": ""}).model_dump(mode="json"))})
+    pipeline = MarketPipeline(FakeProvider(snapshot), MarketSnapshotStore(tmp_path / "snapshots"), MarketSnapshotRepository(session_factory))
+    _, features = await pipeline.freeze_and_compute(("600000.SH",), snapshot.decision_date, snapshot.decision_cutoff)
+    assert features["600000.SH"].values["turnover_pct"].value == Decimal("1.06000000")
+
+
+@pytest.mark.asyncio
 async def test_pipeline_uses_calendar_next_day_and_persists_features(
     session_factory: SessionFactory,
     tmp_path: Path,

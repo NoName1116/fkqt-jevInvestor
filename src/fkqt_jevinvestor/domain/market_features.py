@@ -2,9 +2,16 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Self
+from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 
 class AdjustmentMode(StrEnum):
@@ -25,6 +32,14 @@ class DailyBar(BaseModel):
     volume: Decimal = Field(ge=0)
     amount_cny: Decimal = Field(ge=0)
     adjustment_mode: AdjustmentMode
+    float_shares_in_volume_units: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_serializer(mode="wrap")
+    def serialize_compatible(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload = handler(self)
+        if self.float_shares_in_volume_units is None:
+            payload.pop("float_shares_in_volume_units", None)
+        return payload
 
 
 class SecurityTradeState(BaseModel):
