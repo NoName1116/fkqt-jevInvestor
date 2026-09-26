@@ -22,11 +22,11 @@ from fkqt_jevinvestor.providers.base import (
     ProviderHealth,
     ProviderUnavailableError,
 )
+from fkqt_jevinvestor.providers.diagnostics import REASONS, build_jev_diagnostic, safe_usage
 from fkqt_jevinvestor.providers.jev_market_questions import (
     QUESTION_DEFINITIONS,
     build_jev_market_questions,
 )
-from fkqt_jevinvestor.providers.diagnostics import REASONS, build_jev_diagnostic, safe_usage
 
 
 class SystemOneMarketClient(Protocol):
@@ -109,7 +109,10 @@ class TypeSafeJevMarketProvider:
                 model=self._model,
             )
         except Exception as exc:
-            raise ProviderUnavailableError(type(exc).__name__) from exc
+            diagnostic = build_jev_diagnostic(None, command, ())
+            kind = type(exc).__name__
+            diagnostic["transport_type"] = kind if kind in {"TimeoutError", "ConnectionError", "APIConnectionError", "APITimeoutError", "RateLimitError", "AuthenticationError", "PermissionDeniedError"} else "OTHER"
+            raise ProviderUnavailableError(kind, diagnostic=diagnostic) from exc
 
         response_hash = sha256_json(_sanitized_response(response))
         try:

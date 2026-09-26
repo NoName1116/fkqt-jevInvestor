@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,7 +11,11 @@ from fkqt_jevinvestor.persistence.jev_repository import JevEvaluationRepository
 from fkqt_jevinvestor.persistence.models import JevAttemptRecord
 from fkqt_jevinvestor.providers.jev_market import TypeSafeJevMarketProvider
 from tests.integration import test_portfolio_repository as fixtures
-from tests.unit.test_jev_market_provider import FakeClient, _command, _valid_response
+from tests.unit.test_jev_market_provider import (  # pyright: ignore[reportPrivateUsage]
+    FakeClient,
+    _command,  # pyright: ignore[reportPrivateUsage]
+    _valid_response,  # pyright: ignore[reportPrivateUsage]
+)
 
 session_factory = fixtures.session_factory
 
@@ -35,3 +40,15 @@ def test_empty_safety_migration_round_trip(tmp_path: Path) -> None:
     command.upgrade(cfg, "head")
     command.downgrade(cfg, "0009_forward_operations")
     command.upgrade(cfg, "head")
+
+
+def test_nonempty_recovery_cannot_be_lossily_downgraded(tmp_path: Path) -> None:
+    cfg = Config("alembic.ini")
+    database = tmp_path / "guard.db"
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database.as_posix()}")
+    command.upgrade(cfg, "head")
+    with sqlite3.connect(database) as connection:
+        connection.execute("INSERT INTO ai_signal_forward_recovery (id,portfolio_id,trade_date,stage_id,stage,config_hash,expected_stage_hash,reason,previous_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("a" * 64, "p", "2026-09-28", "b" * 64, "CALENDAR", "c" * 64, "d" * 64, "修复", "{}", "2026-09-28T13:00:00"))
+    with pytest.raises(RuntimeError, match="FORWARD_SAFETY_DOWNGRADE_DATA_LOSS"):
+        command.downgrade(cfg, "0009_forward_operations")

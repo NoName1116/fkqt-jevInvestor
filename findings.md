@@ -266,3 +266,14 @@
 - VERIFY 原来未拦 DATA_UNAVAILABLE，真实持久决策集成测试 RED→GREEN 修正；数据与 Provider 任一不足均 DEGRADED。
 - Windows Interactive Task 仅登录时运行。安装 -WhatIf 和内存 XML（5 分钟、105 分钟、IgnoreNew）已验证，未调用 Register-ScheduledTask。
 - 首次完整离线 368 passed/2 failed；迁移旧 head 断言及 NAV 新旧 JSON 返回差异已修，定点 3 passed。第三方 2 项弃用 warning 不改变运行结果，不在本范围升级依赖。
+
+## 2026-09-26 R61–R64实现与审查结论
+
+- 采用现有CAS事务、Provider和build_forward_pnl_labels，不另造标签阈值、调度框架或训练；正式serialization排除diagnostic/usage，缓存从Attempt取回旁路审计。
+- 独立审查发现真实FAILED写入input_hash=None，恢复会永远拒绝；Repository保留原hash，真实Runner RED→GREEN，累计次数与授权消费不重置。
+- Jev调用后LLM之前可能崩溃，旧sizing/Decision链接不能代表完整调用分母；新增调用前不可变run-identity.json，旧缺事实明确UNKNOWN，不反向编造归属。
+- 每日QFQ基准可改变，拼接每日单条行情会误造盈亏标签；D5冻结完整窗口统一基准，交易日链仍严格使用冻结日历，成熟真实集成Brier=1.14。
+- EXECUTE已有NAV的恢复必须先核对POST_EXECUTION执行hash和资产及EXECUTION_PREPARE；不依赖恢复后Runner再拒绝来冒充授权安全。
+- 全部实际usage、历史价格身份、CNY与NAV完整时才算扣模型估算费用收益；100资金/100NAV/4费用→-0.04，未知仍null。
+- 本轮受影响103项首跑102通过/1迁移断言失败，失败项修后通过；新边界20项19通过/1缓存审计失败，失败项修后通过；最终29Python文件静态零错误。只一份fresh最终审查，无第二审查席位。
+- 历史验收副本report-copy.db升级0010，原replay.db和未激活forward.db仍0009。future阻断、默认预览和重复报告后副本hash不变。报告UNVERIFIED/PENDING_LABELS，配置证据不一致时不下收益结论。

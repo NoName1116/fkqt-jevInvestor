@@ -123,8 +123,14 @@ async def test_claim_success_cache_and_recent_action(session_factory: SessionFac
     claim = await repository.claim(first_run, command)
     stored = await repository.record_success(
         claim,
-        _result(command, claim.evaluation_id),
+        _result(command, claim.evaluation_id).model_copy(update={"usage": {"input_tokens": 123, "output_tokens": 45}}),
     )
+    from sqlalchemy import select
+
+    from fkqt_jevinvestor.persistence.models import DecisionAttemptRecord
+    async with session_factory() as session:
+        attempt = await session.scalar(select(DecisionAttemptRecord).where(DecisionAttemptRecord.evaluation_id == claim.evaluation_id))
+        assert attempt is not None and attempt.usage_json == {"input_tokens": 123, "output_tokens": 45}
     cached = await repository.claim(second_run, command)
     history = await repository.recent_actions("paper-main", "600000.SH")
     historical = await repository.recent_actions(

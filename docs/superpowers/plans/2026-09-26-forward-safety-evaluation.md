@@ -28,53 +28,65 @@
 
 ## Task 1：日期保护（R61）
 
+状态：完成；3 RED/2既有通过 → 5 GREEN，提交f4b6be5。
+
 Files: operations/runner.py，tests/integration/test_forward_date_guard.py。
 Produces: run_once在业务之前返回BLOCKED/FORWARD_FUTURE_DATE或FORWARD_BEFORE_MARKET_CLOSE。
 
-- [ ] 写未来/14:59:59/15:00/历史/时区跨日测试，假Repository任何调用直接失败，assert error_code与无目录创建。
-- [ ] `pytest tests/integration/test_forward_date_guard.py -q`，预期新保护失败。
-- [ ] run_once开头以北京时间检查，拒绝时不进入_alert或_run_once；保留历史与无时区语义。
-- [ ] 同命令GREEN，提交“新增前向日期无副作用保护”。
+- [x] 写未来/14:59:59/15:00/历史/时区跨日测试，假Repository任何调用直接失败，assert error_code与无目录创建。
+- [x] `pytest tests/integration/test_forward_date_guard.py -q`，预期新保护失败。
+- [x] run_once开头以北京时间检查，拒绝时不进入_alert或_run_once；保留历史与无时区语义。
+- [x] 同命令GREEN，提交“新增前向日期无副作用保护”。
 
 ## Task 2：诊断、实际用量、0010迁移（R62/R59）
+
+状态：完成；诊断与迁移定点通过，提交018cfc1；后续边界修复并入最终提交。
 
 Files: providers/diagnostics.py、jev_market.py、deepseek_decision.py、base.py；domain/jev_market.py、decision.py；services/jev_market_service.py、c_group_decision.py；persistence/models.py、jev_repository.py、decision_repository.py；migrations/versions/0010_forward_safety_evaluation.py；tests/unit/test_provider_diagnostics.py、tests/integration/test_forward_safety_migration.py。
 Produces: build_jev_diagnostic(response,command,reason_codes)->dict；safe_usage(response)->dict|None；可空diagnostic_json/usage_json，旧零字段省略；ForwardRecoveryRecord存old-stage快照。
 
-- [ ] 写具体SUM/LABEL/CHOICE失败原因、恶意字段、合法usage/未知usage、旧序列化、诊断上限RED。
-- [ ] `pytest tests/unit/test_provider_diagnostics.py -q`，预期缺函数或诊断字段失败。
-- [ ] 归一化诊断只保存已知标签、合法有限数值、有界常量；保留原response_hash与旧error_code；在服务和Repository传递保存；usage只接受实际非负整数。
-- [ ] 写新迁移空往返、非空审计拒降级测试；运行两测试文件GREEN并提交。
+- [x] 写具体SUM/LABEL/CHOICE失败原因、恶意字段、合法usage/未知usage、旧序列化、诊断上限RED。
+- [x] `pytest tests/unit/test_provider_diagnostics.py -q`，预期缺函数或诊断字段失败。
+- [x] 归一化诊断只保存已知标签、合法有限数值、有界常量；保留原response_hash与旧error_code；在服务和Repository传递保存；usage只接受实际非负整数。
+- [x] 写新迁移空往返、非空审计拒降级测试；运行两测试文件GREEN并提交。
 
 ## Task 3：恢复（R63）
+
+状态：完成；核心、lease被换、真实失败、NAV冲突定点通过，提交49766b1及最终修复。
 
 Files: operations/recovery.py、persistence/forward_operation_repository.py、operations/runner.py、cli/main.py、operations/cli.py；tests/integration/test_forward_recovery.py。
 Consumes: ForwardRecoveryRecord、已有lease与stage。
 Produces: RecoveryService.preview(config,day,stage)->dict；commit(config,day,stage,reason,expected_stage_hash,now)->dict。
 
-- [ ] 写真实DB预览无写、commit原错误快照、stale/lease/后续成功/DECIDE/VERIFY拒绝、重复commit幂等、attempts不归零测试RED。
-- [ ] `pytest tests/integration/test_forward_recovery.py -q`。
-- [ ] 事务内CAS租约与阶段hash，旧快照写不可变审计，置RETRY_PENDING且保留次数；Runner仅消费一份授权，不增加自动无限重试；不改冻结业务或模型。
-- [ ] 加recover参数，默认preview；GREEN并提交。
+- [x] 写真实DB预览无写、commit原错误快照、stale/lease/后续成功/DECIDE/VERIFY拒绝、重复commit幂等、attempts不归零测试RED。
+- [x] `pytest tests/integration/test_forward_recovery.py -q`。
+- [x] 事务内CAS租约与阶段hash，旧快照写不可变审计，置RETRY_PENDING且保留次数；Runner仅消费一份授权，不增加自动无限重试；不改冻结业务或模型。
+- [x] 加recover参数，默认preview；GREEN并提交。
 
 ## Task 4：只读报告（R64）
+
+状态：完成；空/缺分母/Jev-only失败/成熟评分/同复权基准/模式/CNY费用收益通过，最终提交交付。
 
 Files: operations/evaluation.py、evaluation_metrics.py、evaluation_labels.py、operations/cli.py、cli/main.py；tests/unit/test_forward_evaluation_metrics.py、tests/integration/test_forward_evaluation.py。
 Consumes: 已有Portfolio/NAV/Decision/Sizing/JevAttempt/MarketSnapshot及Task2用量。
 Produces: build_report(factory,config,from_date,to_date,pricing=None)->dict；write_report(report,root)->JSON/Markdown路径；标签复用build_forward_pnl_labels。
 
-- [ ] 写收益/回撤/Brier/10桶/费用手算及null/空样本/日期缺口/混版本/未知费用RED。
-- [ ] `pytest tests/unit/test_forward_evaluation_metrics.py tests/integration/test_forward_evaluation.py -q`。
-- [ ] 完整性分母取冻结snapshot证券身份与held-only，并检查链接；报告全部状态与actions、实际Attempt、诊断覆盖/费用coverage；NAV缺口显式拒绝收益结论。
-- [ ] 从后续冻结快照构造5个真实交易日标签，检查identity/版本/截止日，未来未成熟不评分；盈亏四问单列，不为data_sufficiency生成标签。
-- [ ] 使用Decimal，内容hash排除生成时间，JSON/Markdown冲突不覆盖；report参数附可选pricing-json，不调用Provider。
-- [ ] GREEN并提交。
+- [x] 写收益/回撤/Brier/10桶/费用手算及null/空样本/日期缺口/混版本/未知费用RED。
+- [x] `pytest tests/unit/test_forward_evaluation_metrics.py tests/integration/test_forward_evaluation.py -q`。
+- [x] 完整性分母取冻结snapshot证券身份与held-only，并检查链接；报告全部状态与actions、实际Attempt、诊断覆盖/费用coverage；NAV缺口显式拒绝收益结论。
+- [x] 从后续冻结快照构造5个真实交易日标签，检查identity/版本/截止日，未来未成熟不评分；盈亏四问单列，不为data_sufficiency生成标签。
+- [x] 使用Decimal，内容hash排除生成时间，JSON/Markdown冲突不覆盖；report参数附可选pricing-json，不调用Provider。
+- [x] GREEN并提交。
 
 ## Task 5：集成文档和最终验收
 
+状态：完成；一次受影响103项102通过/1旧迁移断言失败，失败定点通过；审查边界定点20项19通过/1缓存审计失败，失败定点通过；29文件Ruff/Pyright全绿；完整证据见docs/validation/2026-09-26-forward-safety-evaluation.md。不重复旧全套。
+
 Files: docs/runbooks/forward-safety-evaluation.md、docs/validation/2026-09-26-forward-safety-evaluation.md、task_plan.md、findings.md。
-- [ ] 运行新增和受影响的Provider/Repository/Runner/迁移/CLI测试一次；失败修后仅重测失败项。
-- [ ] Ruff/Pyright新增和改动文件一次，失败定点；Secret扫描和diff --check。
-- [ ] 用独立临时库生成完整报告、预览恢复、验证CLI future阻断，不升级或污染真实账户。
-- [ ] 一次fresh最终审查，集中修Important/Critical，每项RED/GREEN，不复审；保存所有ruling与knownissues。
-- [ ] 保存完整依赖/运行/故障命令、自检、文件清单；只本地提交，不外部集成。
+- [x] 运行新增和受影响的Provider/Repository/Runner/迁移/CLI测试一次；失败修后仅重测失败项。
+- [x] Ruff/Pyright新增和改动文件一次，失败定点；Secret扫描和diff --check。
+- [x] 用独立临时库生成完整报告、预览恢复、验证CLI future阻断，不升级或污染真实账户。
+- [x] 一次fresh最终审查，集中修Important/Critical，每项RED/GREEN，不复审；保存所有ruling与knownissues。
+- [x] 保存完整依赖/运行/故障命令、自检、文件清单；只本地提交，不外部集成。
+
+以上原始步骤清单保留以对照执行；完成状态与实际命令/失败修复以各Task状态和验收文档为准。

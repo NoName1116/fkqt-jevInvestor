@@ -25,6 +25,7 @@ from fkqt_jevinvestor.persistence.models import (
     DecisionEvaluationRecord,
     DecisionRunLinkRecord,
 )
+from fkqt_jevinvestor.providers.diagnostics import normalize_usage
 
 SessionFactory = async_sessionmaker[AsyncSession]
 _SENSITIVE_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
@@ -585,8 +586,8 @@ class DecisionEvaluationRepository:
         attempt.status = result.status.value
         attempt.raw_response_hash = result.raw_response_hash
         attempt.error_code = result.error_code
-        attempt.diagnostic_json = result.diagnostic
-        attempt.usage_json = result.usage
+        attempt.diagnostic_json = None
+        attempt.usage_json = normalize_usage(result.usage)
 
     @staticmethod
     def _expire_attempt(attempt: DecisionAttemptRecord, now: datetime) -> None:
@@ -639,4 +640,5 @@ class DecisionEvaluationRepository:
             finished_at=finished_at,
             latency_ms=attempt.latency_ms,
             error_code=record.error_code,
+            usage=normalize_usage(attempt.usage_json),
         )

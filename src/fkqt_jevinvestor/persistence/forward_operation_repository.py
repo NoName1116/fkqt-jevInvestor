@@ -6,7 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
-from fkqt_jevinvestor.persistence.models import ForwardLeaseRecord, ForwardRecoveryRecord, ForwardStageRecord
+from fkqt_jevinvestor.persistence.models import (
+    ForwardLeaseRecord,
+    ForwardRecoveryRecord,
+    ForwardStageRecord,
+)
 
 
 class ForwardOperationRepository:
@@ -79,7 +83,8 @@ class ForwardOperationRepository:
             row.attempts = attempts
             row.outcome_json = outcome
             row.error_code = error_code
-            row.input_hash = input_hash
+            if input_hash is not None:
+                row.input_hash = input_hash
             row.next_retry_at = next_retry_at.timestamp() if next_retry_at else None
 
     async def status(self, portfolio_id: str, trade_date: date, config_hash: str) -> tuple[ForwardStageRecord, ...]:

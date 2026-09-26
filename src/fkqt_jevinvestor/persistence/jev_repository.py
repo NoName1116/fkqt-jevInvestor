@@ -28,6 +28,7 @@ from fkqt_jevinvestor.persistence.models import (
     JevQuestionResultRecord,
     JevRunLinkRecord,
 )
+from fkqt_jevinvestor.providers.diagnostics import normalize_usage, sanitize_diagnostic
 from fkqt_jevinvestor.providers.jev_market_questions import QUESTION_DEFINITIONS
 
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -579,8 +580,8 @@ class JevEvaluationRepository:
         attempt.status = result.status.value
         attempt.raw_response_hash = result.raw_response_hash
         attempt.error_code = result.error_code
-        attempt.diagnostic_json = result.diagnostic
-        attempt.usage_json = result.usage
+        attempt.diagnostic_json = sanitize_diagnostic(result.diagnostic)
+        attempt.usage_json = normalize_usage(result.usage)
 
     @staticmethod
     def _expire_attempt(attempt: JevAttemptRecord, now: datetime) -> None:
@@ -655,4 +656,6 @@ class JevEvaluationRepository:
             finished_at=finished_at,
             latency_ms=attempt.latency_ms,
             error_code=attempt.error_code,
+            diagnostic=sanitize_diagnostic(attempt.diagnostic_json),
+            usage=normalize_usage(attempt.usage_json),
         )

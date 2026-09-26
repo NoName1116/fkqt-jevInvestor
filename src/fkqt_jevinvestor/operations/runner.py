@@ -126,6 +126,9 @@ class ForwardRunner:
                     if remaining <= 0:
                         raise ValueError("FORWARD_PROCESS_TIMEOUT")
                     output = await self._stage(config, trade_date, stage, root, outputs, int(max(1, remaining)))
+                    if stage == "CALENDAR":
+                        output["_run_mode"] = "LIVE_FORWARD" if trade_date == timestamp.astimezone(CHINA_STANDARD_TIME).date() else "REAL_SOURCE_REPLAY"
+                        output["_mode_attested_at"] = timestamp.isoformat()
                     if stage == "CALENDAR" and output.get("is_open") is not False:
                         nav = await PortfolioRepository(self.repository.factory).list_nav(config.portfolio_id)
                         recorded = {item.valuation_date.isoformat() for item in nav}
@@ -170,6 +173,7 @@ class ForwardRunner:
         env["PYTHONPATH"] = str(cwd if fkqt else cwd / "src")
         env["JEV_INVESTOR_MARKET_SNAPSHOT_ROOT"] = str(config.data_root / "snapshots")
         env["JEV_INVESTOR_EXECUTION_BUNDLE_ROOT"] = str(config.data_root / "execution")
+        env["JEV_INVESTOR_FORWARD_CONFIG_HASH"] = config.content_hash()
         env.pop("JEV_INVESTOR_C_GROUP_CANDIDATE_SYMBOLS", None)
         if decision_root is not None:
             env["FKQT_MANIFEST_BUNDLE_ROOT"] = str(decision_root)

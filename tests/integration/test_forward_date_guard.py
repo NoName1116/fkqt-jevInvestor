@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from fkqt_jevinvestor.operations.config import ForwardOperationConfig
-from fkqt_jevinvestor.operations.runner import ForwardRunOutcome, ForwardRunner
+from fkqt_jevinvestor.operations.runner import ForwardRunner, ForwardRunOutcome
 from tests.unit.test_forward_operation_config import values
 
 

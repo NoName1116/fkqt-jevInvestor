@@ -156,7 +156,7 @@ class JevMarketEvaluationService:
         started = time.perf_counter()
         try:
             result = await self._provider.evaluate(command)
-        except ProviderUnavailableError:
+        except ProviderUnavailableError as exc:
             finished_at = datetime.now(UTC)
             failure = self._failure_result(
                 claim=claim,
@@ -168,7 +168,7 @@ class JevMarketEvaluationService:
                 finished_at=finished_at,
                 latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
             )
-            return await self._repository.record_failure(claim, failure)
+            return await self._repository.record_failure(claim, failure.model_copy(update={"diagnostic": exc.diagnostic}))
         except ProviderContractError as exc:
             finished_at = datetime.now(UTC)
             failure = self._failure_result(

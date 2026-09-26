@@ -15,7 +15,9 @@ from fkqt_jevinvestor.domain.jev_market import JevEvaluationCommand, JevEvaluati
 
 
 class ProviderUnavailableError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, diagnostic: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
 
 
 class ProviderContractError(RuntimeError):

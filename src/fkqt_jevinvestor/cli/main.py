@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
@@ -319,6 +320,13 @@ async def _run_c_group(
             if stable_run else uuid4()
         )
         jev_provider_version = "typesafe-sdk-0.7.0"
+        from fkqt_jevinvestor.operations.run_identity import write_run_identity
+
+        write_run_identity(settings.market_snapshot_root.parent, {
+            "portfolio_id": args.portfolio_id, "date": args.decision_date.isoformat(), "run_id": str(run_id),
+            "market_snapshot_hash": selected_hash, "required_symbols": sorted(required_symbols),
+            "operation_config_hash": os.environ.get("JEV_INVESTOR_FORWARD_CONFIG_HASH"),
+        })
         jev_service = JevMarketEvaluationService(
             provider=TypeSafeJevMarketProvider.from_api_key(
                 settings.typesafe_api_key,
@@ -678,6 +686,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     forward_parser = subparsers.add_parser("forward")
     forward_commands = forward_parser.add_subparsers(dest="forward_command", required=True)
+    report_parser = forward_commands.add_parser("report")
+    report_parser.add_argument("--config", required=True)
+    report_parser.add_argument("--from-date", type=date.fromisoformat, required=True)
+    report_parser.add_argument("--to-date", type=date.fromisoformat, required=True)
+    report_parser.add_argument("--output-root", required=True)
+    report_parser.add_argument("--pricing-json")
     for name in ("run", "status", "validate", "init", "recover", "diagnostics"):
         command_parser = forward_commands.add_parser(name)
         command_parser.add_argument("--config", required=True)

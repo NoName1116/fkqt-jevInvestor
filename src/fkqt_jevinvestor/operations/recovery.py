@@ -10,7 +10,13 @@ from fkqt_jevinvestor.ingestion.canonical import sha256_json
 from fkqt_jevinvestor.operations.config import ForwardOperationConfig
 from fkqt_jevinvestor.operations.runner import STAGES
 from fkqt_jevinvestor.persistence.forward_operation_repository import ForwardOperationRepository
-from fkqt_jevinvestor.persistence.models import ForwardLeaseRecord, ForwardRecoveryRecord, ForwardStageRecord
+from fkqt_jevinvestor.persistence.models import (
+    ForwardLeaseRecord,
+    ForwardRecoveryRecord,
+    ForwardStageRecord,
+    NavRecord,
+    PortfolioSnapshotRecord,
+)
 
 
 def stage_snapshot(row: ForwardStageRecord) -> dict[str, Any]:
@@ -45,8 +51,29 @@ class RecoveryService:
             return {**info, "error_code": "FORWARD_RECOVERY_DOWNSTREAM_COMMITTED"}
         if row.input_hash != config.content_hash():
             return {**info, "error_code": "FORWARD_RECOVERY_INPUT_CONFLICT"}
+        business: dict[str, Any] = {}
+        if stage == "EXECUTE":
+            nav = await session.scalar(select(NavRecord).where(NavRecord.portfolio_id == config.portfolio_id,
+                                                             NavRecord.valuation_date == day))
+            records = (await session.scalars(select(PortfolioSnapshotRecord).where(
+                PortfolioSnapshotRecord.portfolio_id == config.portfolio_id,
+                PortfolioSnapshotRecord.snapshot_type == "POST_EXECUTION"))).all()
+            snapshots = [record for record in records if record.as_of.date() == day]
+            prepared = by_stage["EXECUTION_PREPARE"].outcome_json
+            expected = prepared.get("execution_hash")
+            business = {"nav_id": nav.id if nav else None, "snapshot_ids": sorted(record.id for record in snapshots),
+                        "expected_execution_hash": expected,
+                        "snapshot_hashes": sorted(record.content_hash for record in snapshots)}
+            if (nav is None) != (len(snapshots) == 0):
+                return {**info, "business": business, "error_code": "FORWARD_RECOVERY_INPUT_CONFLICT"}
+            if nav is not None and (len(snapshots) != 1 or not isinstance(expected, str)
+                    or (snapshots[0].details_json or {}).get("execution_input_hash") != expected
+                    or snapshots[0].total_equity != nav.total_equity):
+                return {**info, "business": business, "error_code": "FORWARD_RECOVERY_INPUT_CONFLICT"}
         snapshot = stage_snapshot(row)
-        return {**info, "allowed": True, "error_code": None, "stage_hash": sha256_json(snapshot), "previous": snapshot}
+        snapshot["business"] = business
+        return {**info, "allowed": True, "error_code": None, "business": business,
+                "stage_hash": sha256_json(snapshot), "previous": snapshot}
 
     async def preview(self, config: ForwardOperationConfig, day: date, stage: str) -> dict[str, Any]:
         async with self.factory() as session:
@@ -57,7 +84,7 @@ class RecoveryService:
         if now.tzinfo is None or not re.fullmatch(r"[0-9a-f]{64}", expected_stage_hash):
             raise ValueError("FORWARD_RECOVERY_ARGUMENT_INVALID")
         if (not 1 <= len(reason.strip()) <= 256 or any(ord(c) < 32 or ord(c) == 127 for c in reason)
-                or re.search(r"bearer|api.?key|password|secret|token|https?://|\bsk-", reason, re.I)):
+                or re.search(r"bearer|api.?key|password|secret|token|https?://|\bsk-", reason, re.IGNORECASE)):
             raise ValueError("FORWARD_RECOVERY_REASON_UNSAFE")
         key = sha256_json([config.portfolio_id, day.isoformat(), stage, config.content_hash(), expected_stage_hash])
         async with self.factory() as session:

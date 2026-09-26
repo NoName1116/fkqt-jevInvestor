@@ -4,6 +4,7 @@ import sys
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 from sqlalchemy.engine import make_url
 
@@ -44,6 +45,16 @@ async def execute_forward(args: argparse.Namespace) -> int:
         engine = create_engine(url)
         factory = create_session_factory(engine)
         repository = ForwardOperationRepository(factory)
+        if args.forward_command == "report":
+            from fkqt_jevinvestor.operations.evaluation import build_report, write_report
+
+            pricing = json.loads(Path(args.pricing_json).read_text(encoding="utf-8")) if args.pricing_json else None
+            if pricing is not None and (not isinstance(pricing, list) or any(not isinstance(item, dict) for item in cast(list[Any], pricing))):
+                raise ValueError("REPORT_PRICING_INVALID")
+            report = await build_report(factory, config, args.from_date, args.to_date, cast(list[dict[str, Any]] | None, pricing))
+            paths = write_report(report, Path(args.output_root))
+            print(json.dumps({"report_hash": report["report_hash"], "files": [str(path) for path in paths]}, sort_keys=True))
+            return 0
         if args.forward_command == "recover":
             from fkqt_jevinvestor.operations.recovery import RecoveryService
 
@@ -73,6 +84,9 @@ async def execute_forward(args: argparse.Namespace) -> int:
             return 0
         if args.forward_command == "run":
             result = await ForwardRunner(repository, env=env).run_once(config, args.trade_date, datetime.now(UTC))
+            if result.status == "BLOCKED":
+                print(json.dumps(asdict(result), default=str, sort_keys=True))
+                return result.exit_code
             delivery = await dispatch_outbox(config, factory=factory)
             print(json.dumps({**asdict(result), "tax_policy_version": "GROSS_V1", "alerts": asdict(delivery)}, default=str, sort_keys=True))
             return result.exit_code
@@ -83,8 +97,10 @@ async def execute_forward(args: argparse.Namespace) -> int:
             print(result.model_dump_json())
             return 0 if result.status in {"SUCCESS", "LIVE_FORWARD_PENDING"} else 2
         raise ValueError("FORWARD_COMMAND_INVALID")
-    except (OSError, RuntimeError, ValueError):
-        print("FORWARD_COMMAND_FAILED", file=sys.stderr)
+    except (OSError, RuntimeError, ValueError) as exc:
+        code = str(exc)
+        safe = (code.startswith(("FORWARD_RECOVERY_", "REPORT_")) or code in {"FORWARD_LEASE_BUSY", "FORWARD_LEASE_LOST"})
+        print(code if safe and code.replace("_", "").isalnum() and code.isupper() else "FORWARD_COMMAND_FAILED", file=sys.stderr)
         return 2
     finally:
         if engine is not None:
