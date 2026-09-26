@@ -46,10 +46,11 @@ async def test_closed_day_has_no_business_writes(session_factory: fixtures.Sessi
 
 
 @pytest.mark.asyncio
-async def test_only_transient_errors_retry(session_factory: fixtures.SessionFactory, tmp_path: Path) -> None:
+@pytest.mark.parametrize("code", ["DATA_NOT_READY", "NETWORK_TEMPORARY_FAILURE", "HTTP_429"])
+async def test_only_transient_errors_retry(session_factory: fixtures.SessionFactory, tmp_path: Path, code: str) -> None:
     config = ForwardOperationConfig.model_validate({**values(tmp_path), "start_date": date(2026, 9, 28)})
     def process(argv: tuple[str, ...], cwd: Path, **kwargs: object) -> ProcessOutcome:
-        return ProcessOutcome(2, "", "DATA_NOT_READY", False, 0)
+        return ProcessOutcome(2, "", code, False, 0)
     runner = ForwardRunner(ForwardOperationRepository(session_factory), process=process)
     now = datetime(2026, 9, 28, 13, 15, tzinfo=UTC)
     first = await runner.run_once(config, date(2026, 9, 28), now)
@@ -58,7 +59,7 @@ async def test_only_transient_errors_retry(session_factory: fixtures.SessionFact
     for delta in (61, 362, 1263):
         last = await runner.run_once(config, date(2026, 9, 28), now + timedelta(seconds=delta))
     assert last.status == "FAILED"
-    assert last.error_code == "DATA_NOT_READY"
+    assert last.error_code == code
 
 
 @pytest.mark.asyncio

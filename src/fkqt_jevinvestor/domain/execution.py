@@ -100,19 +100,23 @@ def capacity_quantity(
     snapshot: MarketExecutionSnapshot,
     price: Decimal,
     policy: ExecutionPolicy,
+    *,
+    allow_odd_lot: bool = False,
 ) -> int:
     if snapshot.daily_amount_cny is None or price <= 0:
         return 0
     raw = (
         snapshot.daily_amount_cny * policy.max_daily_amount_participation_pct / price
     ).to_integral_value(rounding=ROUND_DOWN)
-    return round_lot(int(raw), policy)
+    return int(raw) if allow_odd_lot else round_lot(int(raw), policy)
 
 
 def assess_execution_gate(
     snapshot: MarketExecutionSnapshot,
     side: OrderSide,
     policy: ExecutionPolicy,
+    *,
+    allow_odd_lot: bool = False,
 ) -> ExecutionGateDecision:
     if snapshot.trading_day_status is TradingDayStatus.UNKNOWN:
         return _blocked(VirtualOrderStatus.DATA_UNAVAILABLE, "TRADING_CALENDAR_UNAVAILABLE")
@@ -136,7 +140,8 @@ def assess_execution_gate(
         if side is OrderSide.SELL and price <= snapshot.lower_limit_price:
             return _blocked(VirtualOrderStatus.REJECTED, "SELL_AT_LOWER_LIMIT")
 
-    if capacity_quantity(snapshot, price, policy) < policy.lot_size:
+    minimum = 1 if allow_odd_lot and side is OrderSide.SELL else policy.lot_size
+    if capacity_quantity(snapshot, price, policy, allow_odd_lot=allow_odd_lot) < minimum:
         return _blocked(VirtualOrderStatus.EXPIRED, "ZERO_EXECUTION_CAPACITY")
     return ExecutionGateDecision(allowed=True, status=VirtualOrderStatus.PENDING_NEXT_OPEN)
 

@@ -46,6 +46,12 @@ test_v2_binds_corporate_events_before_accepting_bonus_context(Path(sys.argv[1])/
     corporate = load_fkqt_execution_manifest_v2(tmp_path / "corporate/with-rights", date(2026, 9, 25), {"600000.SH"})
     assert corporate.corporate_actions is not None
     assert str(corporate.corporate_actions.events[0].bonus_ratio) == "0.1"
+    outer_path = next((tmp_path / "corporate/with-rights/manifests").glob("*.json"))
+    outer = json.loads(outer_path.read_text(encoding="utf-8"))
+    outer["request_params"]["corporate_action_manifest_hash"] = None
+    outer_path.write_text(json.dumps(outer), encoding="utf-8")
+    with pytest.raises(FkqtBundleError, match="DATASET_MANIFEST_ID_MISMATCH"):
+        load_fkqt_execution_manifest_v2(tmp_path / "corporate/with-rights", date(2026, 9, 25), {"600000.SH"})
     calendar_path = next((tmp_path / "empty/calendar/manifests").glob("*.json"))
     manifest = json.loads(calendar_path.read_text(encoding="utf-8"))
     parquet = tmp_path / "empty/calendar" / manifest["storage_path"]

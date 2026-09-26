@@ -26,6 +26,13 @@ def write_actions(root: Path) -> Path:
         "raw_record_hash": "b" * 64, "content_hash": hashlib.sha256(path.read_bytes()).hexdigest(),
         "storage_path": "events.parquet",
     }
+    identity = hashlib.sha256(json.dumps(
+        {key: manifest[key] for key in (
+            "dataset_type", "as_of_date", "source", "dataset_version",
+            "request_params", "schema_hash", "raw_record_hash",
+        )}, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    manifest["dataset_id"] = identity
     (root / "manifests").mkdir()
     (root / "manifests" / f"{identity}.json").write_text(json.dumps(manifest), encoding="utf-8")
     return path

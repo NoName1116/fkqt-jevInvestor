@@ -72,9 +72,12 @@ Set-Location 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner'
 $env:PYTHONPATH = 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/src'
 & 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor/.venv/Scripts/python.exe' -m fkqt_jevinvestor forward run --config 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/config/forward.example.json' --date 2026-09-28
 & 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor/.venv/Scripts/python.exe' -m fkqt_jevinvestor forward status --config 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/config/forward.example.json' --date 2026-09-28
+& 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor/.venv/Scripts/python.exe' -m fkqt_jevinvestor daily status --trade-date 2026-09-28 --portfolio-id forward-validation-c
 ```
 
 run 依次执行 CALENDAR、EXECUTION_PUBLISH、EXECUTION_PREPARE、EXECUTE、CANDIDATE_PREPARE、DECISION_PUBLISH、DECIDE、VERIFY。status 按组合、日期、当前配置哈希读取持久阶段，输出 attempts、error_code、next_retry_at。
+
+daily status 独立查询当日 NAV、待执行订单与正式运行状态；组合编号须与配置一致，示例为 forward-validation-c。
 
 | 状态 | 退出码 | 含义 |
 |---|---|---|

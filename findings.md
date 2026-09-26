@@ -251,6 +251,8 @@
 
 ## 2026-09-26 真实验证与最终验收更新
 
+- 最终独立审查发现并修复 3 项 Important：整数红股尾仓 EXIT 的虚假完成、真实网络错误未接重试、V2 外层公司行为绑定篡改绕过。全部裁定及证据保存在 docs/validation/2026-09-26-forward-review.md；未放松模型契约或重跑整套。
+
 - 九项权限/模型合成契约实际 AVAILABLE；DeepSeek 旧 chat 的成功不算版本升级证据，显式 flash 契约通过。官方发布：[V4.1 Flash](https://api-docs.deepseek.com/news/news260910/)。
 - 2026-09-25 daily/stk_limit 合法空响应只证明接口可访问，不能证明当日行情齐备。两证券共同已观察日期为 2026-09-24，只运行 REAL_SOURCE_REPLAY；未做未来连续交易日验证。
 - SQL 查实第一次历史运行个股均 DATA_UNAVAILABLE，唯一必要缺失为 FLOAT_SHARES_UNAVAILABLE。补上 daily_basic.float_share 并保留单位元数据；万股转百股匹配成交量后由原公式算换手百分数，旧 None 字段不改变 canonical hash。[官方字段与权限](https://tushare.pro/document/2?doc_id=32)。

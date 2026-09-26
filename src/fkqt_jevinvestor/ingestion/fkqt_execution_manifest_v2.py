@@ -1,4 +1,5 @@
 import hashlib
+import json
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -27,6 +28,15 @@ def _read_dataset(
     except (OSError, ValueError) as exc:
         raise FkqtBundleError("DATASET_MANIFEST_INVALID") from exc
     if manifest.dataset_id != paths[0].stem or manifest.dataset_type != dataset_type:
+        raise FkqtBundleError("DATASET_MANIFEST_ID_MISMATCH")
+    identity = {key: getattr(manifest, key) for key in (
+        "dataset_type", "as_of_date", "source", "dataset_version",
+        "request_params", "schema_hash", "raw_record_hash",
+    )}
+    digest = hashlib.sha256(json.dumps(
+        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    if digest != manifest.dataset_id:
         raise FkqtBundleError("DATASET_MANIFEST_ID_MISMATCH")
     if manifest.as_of_date != trade_date.strftime("%Y%m%d"):
         raise FkqtBundleError("DATASET_AS_OF_DATE_MISMATCH")

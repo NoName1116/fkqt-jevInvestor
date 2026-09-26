@@ -130,7 +130,7 @@ Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收
 - T10–T13：一次性编排、CAS 租约、有限重试、业务事实恢复、本地/可选 outbox、Windows 脚本和三种验证模式已实现；未启用持续调度。
 - T14：首次完整离线 368 passed/2 failed/4 deselected；旧迁移断言与 NAV API 兼容两失败已修，连新增非零分红 API 测试定点 3 passed。未重复全套。FKQT 发布侧 24 passed。
 - 实际权限九探针成功；历史单日首次因缺股本无信号，修复股本后 Jev 个股响应仍 CONTRACT_INVALID，正确报告 DEGRADED，不能宣称整个真实模型决策验收成功。
-- Ruff/Pyright 首轮缺陷正在定点修复；迁移空库 0009→0007→0009 成功；阶段末 fresh review 待完成。未推送、合并、注册系统任务、发送外部 Webhook。
+- Ruff/Pyright 首轮缺陷已定点修复；迁移空库 0009→0007→0009 成功。阶段末一次 fresh review 发现 3 项 Important，已集中修复并定点验证。未推送、合并、注册系统任务、发送外部 Webhook。
 
 ## FKQT 前向行情桥接验收记录（2026-09-23）
 

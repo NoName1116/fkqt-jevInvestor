@@ -35,16 +35,18 @@ LIVE_FORWARD 的未来日期状态由离线测试验证为 LIVE_FORWARD_PENDING�
 |---|---|---|---|
 | JEV 离线全量 | 无有效失败 | 首次 368 passed、2 failed、4 deselected；两失败及新增 API 测试定点 3 passed，未重复全套 | 必须 |
 | FKQT 发布回归 | 无失败 | 六文件 24 passed | 必须 |
-| Ruff/Pyright | 0 error | 首轮 23/15 问题；受影响文件定点修复与复验记录继续补充 | 必须 |
-| 迁移往返 | 空库安全、非零资产拒降级 | migration-chain 定点通过 0009→0007→0009 和 base，拒降级补验中 | 必须 |
+| Ruff/Pyright | 0 error | 首轮 23/15 问题；全部失败文件定点修复，Ruff 全通过、Pyright 0 error；新增文件单独静态通过 | 必须 |
+| 迁移往返 | 空库安全、非零资产拒降级 | migration-chain 定点通过 0009→0007→0009 和 base；非零应收降级拒绝并保留金额 1 passed | 必须 |
 | 调度 XML | 5 分钟/105 分钟/IgnoreNew | 内存 Export-ScheduledTask 断言通过，未注册 | 必须 |
-| Secret | 暂存/交付无真实值 | 最终扫描待执行，不打印命中值 | 必须 |
+| Secret | 暂存/交付无真实值 | 三种真实 Key 的两个仓库全范围 diff 扫描均 0，暂存 45 文件匹配 0，不打印值 | 必须 |
 | 真实模型 | 无伪造成功 | 合成契约通过，真实个股失败明确 DEGRADED | 必须 |
-| Contributor 边界 | 不改沙耶回测实现 | 最终 diff 路径核验待执行 | 必须 |
+| Contributor 边界 | 不改沙耶回测实现 | a3e6668..56296d4 下 backtest 源码与测试改动 0 | 必须 |
 
 首次离线两失败：`test_migrated_revision_chain_is_repeatable_and_reversible` 的旧 0007 断言；`test_execute_next_day_returns_orders_fills_snapshot_and_nav` 的 NAV 零字段兼容差异。已修，不删除测试或降低断言。
 
 ## 4. 已知问题和下一步
+
+最终独立审查的 3 项 Important 已集中修复：整数红股尾仓清仓、真实网络错误重试分类、V2 Manifest 元数据身份校验。审查裁定、RED/GREEN 与定点验证完整记录见 `C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/docs/validation/2026-09-26-forward-review.md`。修后没有再次运行全套或第二次独立审查。
 
 1. 真实个股 Jev 返回仍可能不合约，C 组不能称已通过完整实盘资料模型验收；正式系统按 NO_SIGNAL/DEGRADED 保持持仓，不静默换模型。
 2. 没有未来第二交易日资料，因此没有验证真实跨日订单成交；已有相关离线执行测试不替代未来观察。
@@ -54,3 +56,21 @@ LIVE_FORWARD 的未来日期状态由离线测试验证为 LIVE_FORWARD_PENDING�
 6. 第三方 Starlette/AnyIO 与 422 名称弃用告警保留，本阶段不升级无关依赖。
 
 完整配置、依赖、初始化、运行、查看、安装、卸载和停止条件见 `C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/docs/runbooks/forward-operations.md`。
+
+完整 Git 跟踪文件的绝对路径见 `C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/docs/validation/2026-09-26-forward-file-manifest.md`。
+
+## 5. 实施裁定与成本
+
+以下按三个计划的 ledger 出现顺序记录，保留本次实施偏离脚本形式和新增依赖的依据。
+
+1. 共享 venv 指向主仓库，测试显式设当前 worktree PYTHONPATH；默认 pytest 目录有 ACL 故障，换成每次新 data/test-runs 目录。成本：运行必须保留这些显式参数，否则可能测错版本。
+2. 用户 R33 优先，只做定点 RED/GREEN、最终全量一次，修复后只测失败项。成本：最终报告使用首次全量加失败复验，不伪装为再次完整绿套件。
+3. FKQT 使用原有独立解释器，不给 JEV 安装 pandas/tushare。成本：跨仓验收必须指定两个环境。
+4. Proof 增加可选 previous_trade_date，验证真实前序 NAV。成本：上游须提供前序日期，不允许自然日推算。
+5. 事件披露与 source availability 分列，当前晚抓历史不算过去可用。成本：缺可靠证据不能做严格历史 Point-in-Time 回测。
+6. locked_bonus_quantity 与普通 T+1 区分，零值不改变旧输入。成本：新权益组合不能交给旧回测契约；普通 T+1 保持兼容。
+7. V2 内嵌完整冻结事件并绑定来源 hash；只对已经核验覆盖的公司行为解除旧 V1 执行阻断。成本：发布与消费须同时支持 V2，旧 V1 语义不变。
+8. 运行计划同样服从 R33，不额外重复全套。成本同第 2 条。
+9. Bash 计划脚本在 Windows 改用 apply_patch 维护同格式 ledger。成本：任务命令与结果人工记录，不引入 Bash 依赖。
+10. 权限与覆盖分轴，真实共同日期 9/24 只做历史来源重放。成本：不能给出前向/收益结论。
+11. 换手率必需，补 daily_basic.float_share 而非删特征/填零。成本：新增 daily_basic 账号权限与同日股本依赖；缺失明确停止。

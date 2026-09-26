@@ -164,15 +164,21 @@ def execute_order_batch(
                 code="MARKET_DATA_UNAVAILABLE",
             )
             continue
-        gate = assess_execution_gate(snapshot, item.side, item.policy)
+        current_quantity = ledger.position(item.symbol).quantity
+        allow_odd_lot = item.target_position_pct == 0 and current_quantity % item.policy.lot_size != 0
+        gate = assess_execution_gate(snapshot, item.side, item.policy, allow_odd_lot=allow_odd_lot)
         if not gate.allowed:
-            results[item.order_id] = _order_result(item, status=gate.status, code=gate.code)
+            intended = current_quantity if item.target_position_pct == 0 else 0
+            results[item.order_id] = _order_result(
+                item, status=gate.status, code=gate.code, intended=intended, remaining=intended,
+            )
             continue
         assert snapshot.open_price is not None
         price = fill_price(snapshot.open_price, item.side, item.policy)
         desired_quantity = _target_quantity(start_equity, item.target_position_pct, snapshot.open_price, item.policy)
-        current_quantity = ledger.position(item.symbol).quantity
-        intended = round_lot(max(0, current_quantity - desired_quantity), item.policy)
+        intended = max(0, current_quantity - desired_quantity)
+        if not allow_odd_lot:
+            intended = round_lot(intended, item.policy)
         sellable = ledger.sellable_quantity(item.symbol, trade_date)
         if sellable == 0 and intended > 0:
             results[item.order_id] = _order_result(
@@ -186,14 +192,17 @@ def execute_order_batch(
         quantity = min(
             intended,
             sellable,
-            capacity_quantity(snapshot, price, item.policy),
+            capacity_quantity(snapshot, price, item.policy, allow_odd_lot=allow_odd_lot),
         )
-        quantity = round_lot(quantity, item.policy)
+        if not (allow_odd_lot and quantity == current_quantity):
+            quantity = round_lot(quantity, item.policy)
         if quantity == 0:
             results[item.order_id] = _order_result(
                 item,
-                status=VirtualOrderStatus.FILLED,
+                status=VirtualOrderStatus.EXPIRED if intended else VirtualOrderStatus.FILLED,
+                code="ZERO_EXECUTION_CAPACITY" if intended else None,
                 intended=intended,
+                remaining=intended,
             )
             continue
         breakdown = fees(price * quantity, item.side, item.policy)
