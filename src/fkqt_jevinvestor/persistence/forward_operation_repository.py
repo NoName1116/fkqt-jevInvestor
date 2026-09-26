@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
-from fkqt_jevinvestor.persistence.models import ForwardLeaseRecord, ForwardStageRecord
+from fkqt_jevinvestor.persistence.models import ForwardLeaseRecord, ForwardRecoveryRecord, ForwardStageRecord
 
 
 class ForwardOperationRepository:
@@ -67,6 +67,10 @@ class ForwardOperationRepository:
                 raise ValueError("FORWARD_LEASE_LOST")
             key = self.stage_id(portfolio_id, trade_date, stage, config_hash)
             row = await session.get(ForwardStageRecord, key)
+            if status == "RUNNING":
+                await session.execute(update(ForwardRecoveryRecord).where(
+                    ForwardRecoveryRecord.stage_id == key, ForwardRecoveryRecord.consumed_at.is_(None),
+                ).values(consumed_at=now))
             if row is None:
                 row = ForwardStageRecord(id=key, portfolio_id=portfolio_id, trade_date=trade_date,
                                           stage=stage, config_hash=config_hash)

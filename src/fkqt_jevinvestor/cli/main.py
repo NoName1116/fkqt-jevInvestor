@@ -678,7 +678,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     forward_parser = subparsers.add_parser("forward")
     forward_commands = forward_parser.add_subparsers(dest="forward_command", required=True)
-    for name in ("run", "status", "validate", "init"):
+    for name in ("run", "status", "validate", "init", "recover", "diagnostics"):
         command_parser = forward_commands.add_parser(name)
         command_parser.add_argument("--config", required=True)
         if name != "init":
@@ -688,6 +688,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if name == "validate":
             command_parser.add_argument("--mode", choices=("PROVIDER_CONTRACT", "REAL_SOURCE_REPLAY", "LIVE_FORWARD"), required=True)
             command_parser.add_argument("--live", action="store_true")
+        if name == "recover":
+            command_parser.add_argument("--stage", required=True)
+            command_parser.add_argument("--reason", required=True)
+            command_parser.add_argument("--commit", action="store_true")
+            command_parser.add_argument("--expected-stage-hash")
     subparsers.add_parser("version")
     market_parser = subparsers.add_parser("market")
     market_subparsers = market_parser.add_subparsers(dest="market_command", required=True)

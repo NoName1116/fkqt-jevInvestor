@@ -44,6 +44,22 @@ async def execute_forward(args: argparse.Namespace) -> int:
         engine = create_engine(url)
         factory = create_session_factory(engine)
         repository = ForwardOperationRepository(factory)
+        if args.forward_command == "recover":
+            from fkqt_jevinvestor.operations.recovery import RecoveryService
+
+            service = RecoveryService(factory)
+            if args.commit:
+                result = await service.commit(config, args.trade_date, args.stage, args.reason,
+                    args.expected_stage_hash or "", datetime.now(UTC))
+            else:
+                result = await service.preview(config, args.trade_date, args.stage)
+            print(json.dumps(result, default=str, sort_keys=True))
+            return 0 if result.get("allowed", result.get("status") == "RECOVERED") else 2
+        if args.forward_command == "diagnostics":
+            from fkqt_jevinvestor.operations.evaluation import list_diagnostics
+
+            print(json.dumps(await list_diagnostics(factory, config, args.trade_date), default=str, sort_keys=True))
+            return 0
         if args.forward_command == "init":
             state = await PortfolioRepository(factory).create(CreatePortfolio(
                 portfolio_id=config.portfolio_id, name=f"Forward {config.portfolio_id}", initial_cash=args.initial_cash))
