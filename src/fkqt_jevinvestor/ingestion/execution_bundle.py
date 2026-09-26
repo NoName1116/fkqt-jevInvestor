@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot, TradingDayStatus
 from fkqt_jevinvestor.ingestion.canonical import canonical_json, sha256_json
+from fkqt_jevinvestor.ingestion.execution_bundle_v2 import ExecutionBundleV2
 
 
 class ExecutionBundleV1(BaseModel):
@@ -65,7 +66,7 @@ class ExecutionBundleV1(BaseModel):
 
     def verify(self, trade_date: date, required_symbols: AbstractSet[str]) -> None:
         if self.schema_version != "execution-bundle-v1":
-            raise ValueError("EXECUTION_BUNDLE_SCHEMA_UNSUPPORTED")
+            raise ValueError("EXECUTION_BUNDLE_SCHEMA_UNSUPPORTED")  # noqa: TRY004
         if self.trade_date != trade_date:
             raise ValueError("EXECUTION_BUNDLE_DATE_MISMATCH")
         if not self.snapshots or any(
@@ -94,9 +95,19 @@ class ExecutionBundleV1(BaseModel):
             raise ValueError("EXECUTION_BUNDLE_HASH_MISMATCH")
 
 
-def load_execution_bundle(path: Path) -> ExecutionBundleV1:
+def load_execution_bundle(path: Path) -> ExecutionBundleV1 | ExecutionBundleV2:
     try:
-        bundle = ExecutionBundleV1.model_validate_json(path.read_text(encoding="utf-8"))
+        serialized = path.read_text(encoding="utf-8")
+        raw: object = json.loads(serialized)
+        if not isinstance(raw, dict):
+            raise ValueError("EXECUTION_BUNDLE_SCHEMA_UNSUPPORTED")
+        schema = cast(dict[str, object], raw).get("schema_version", "execution-bundle-v1")
+        if schema == "execution-bundle-v2":
+            bundle = ExecutionBundleV2.model_validate_json(serialized)
+        elif schema == "execution-bundle-v1":
+            bundle = ExecutionBundleV1.model_validate_json(serialized)
+        else:
+            raise ValueError("EXECUTION_BUNDLE_SCHEMA_UNSUPPORTED")
     except OSError as exc:
         raise ValueError("EXECUTION_BUNDLE_NOT_FOUND") from exc
     origin = path.with_suffix(".origin.json")
@@ -141,7 +152,7 @@ class ExecutionBundleStore:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    def save(self, bundle: ExecutionBundleV1) -> Path:
+    def save(self, bundle: ExecutionBundleV1 | ExecutionBundleV2) -> Path:
         bundle.verify(bundle.trade_date, set(bundle.snapshots))
         if bundle.requires_origin != (bundle.source_manifest_id is not None):
             raise ValueError("EXECUTION_SOURCE_CONFLICT")
