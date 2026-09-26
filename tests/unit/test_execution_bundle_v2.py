@@ -5,8 +5,7 @@ from pathlib import Path
 import pytest
 
 from fkqt_jevinvestor.domain.forward import TradingDayProofV1
-from fkqt_jevinvestor.ingestion.execution_bundle import load_execution_bundle
-from fkqt_jevinvestor.ingestion.execution_bundle import ExecutionBundleStore
+from fkqt_jevinvestor.ingestion.execution_bundle import ExecutionBundleStore, load_execution_bundle
 from fkqt_jevinvestor.ingestion.execution_bundle_v2 import ExecutionBundleV2
 
 DAY = date(2026, 9, 24)

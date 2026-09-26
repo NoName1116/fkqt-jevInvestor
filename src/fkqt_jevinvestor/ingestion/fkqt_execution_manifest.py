@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot, TradingStatus
 from fkqt_jevinvestor.ingestion.execution_bundle import ExecutionBundleV1
+from fkqt_jevinvestor.ingestion.execution_bundle_v2 import ExecutionBundleV2
 from fkqt_jevinvestor.ingestion.fkqt_manifest import DatasetManifest, FkqtBundleError
 
 EXECUTION_DATASET_VERSION = "TUSHARE_EXECUTION_V1"
@@ -34,6 +35,24 @@ def _positive_decimal(value: object, error_code: str, *, zero_allowed: bool = Fa
 
 def load_fkqt_execution_manifest(
     root: Path, trade_date: date, required_symbols: set[str]
+) -> ExecutionBundleV1 | ExecutionBundleV2:
+    paths = sorted((root / "manifests").glob("*.json"))
+    if len(paths) == 1:
+        try:
+            manifest = DatasetManifest.model_validate_json(paths[0].read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise FkqtBundleError("DATASET_MANIFEST_INVALID") from exc
+        if manifest.dataset_version == "TUSHARE_EXECUTION_V2":
+            from fkqt_jevinvestor.ingestion.fkqt_execution_manifest_v2 import (
+                load_fkqt_execution_manifest_v2,
+            )
+            return load_fkqt_execution_manifest_v2(root, trade_date, required_symbols)
+    return _load_fkqt_execution_manifest(root, trade_date, required_symbols)
+
+
+def _load_fkqt_execution_manifest(
+    root: Path, trade_date: date, required_symbols: set[str], *,
+    dataset_version: str = EXECUTION_DATASET_VERSION,
 ) -> ExecutionBundleV1:
     bundle_root = root.resolve()
     paths = sorted((bundle_root / "manifests").glob("*.json"))
@@ -49,7 +68,7 @@ def load_fkqt_execution_manifest(
         raise FkqtBundleError("DATASET_MANIFEST_ID_MISMATCH")
     if manifest.as_of_date != trade_date.strftime("%Y%m%d"):
         raise FkqtBundleError("DATASET_AS_OF_DATE_MISMATCH")
-    if manifest.source != "TUSHARE" or manifest.dataset_version != EXECUTION_DATASET_VERSION:
+    if manifest.source != "TUSHARE" or manifest.dataset_version != dataset_version:
         raise FkqtBundleError("DATASET_VERSION_UNSUPPORTED")
     requested = manifest.request_params.get("symbols")
     requested_items = cast(list[object], requested) if isinstance(requested, list) else []
