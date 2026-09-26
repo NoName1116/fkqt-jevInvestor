@@ -123,6 +123,13 @@ Phase 2 核心实现和独立整分支审查修复已完成。首次完整验收
 
 ## 2026-09-26 前向运行补齐执行进度
 
+### 后续真实 C 组复验与前向准备
+
+- R40/R56：原冻结两股单次 SDK 诊断各五问通过，旧契约失败根因未复现，不修改产品或放宽校验。
+- R56：独立实验 8c12e88255af4a8ca4acadf05c2b8d1c 八阶段 SUCCESS，Jev 3 份 AVAILABLE、LLM 2 份 AVAILABLE/AVOID，1 sizing、1 NAV、0 订单；仍 REAL_SOURCE_REPLAY，不是前向。
+- R48：禁止外部子进程重跑，全部业务记录前后一致；VERIFY 运行审计允许更新。
+- R56/R57：准备 forward-live-c-20260928，初始模拟资金10万元、固定两股、独立0009数据库；未来日期尚未执行，不注册系统调度。完整命令与自检见 docs/validation/2026-09-26-forward-live-readiness.md。
+
 - 已批准需求 R54–R60 和三份计划，当前在 `feature/forward-operations` 实施，未推送、未合并。
 - T1–T5：V2 独立日历、现金空仓 NAV、有序候选队列自动传递已提交；未支付权益保护已接真实 Repository。
 - T6–T7：公司行为发布/读取、税前应收、锁定红股和成本领域代码已实现；同日多 Lot 成本回归已修复。尚未最终验收。

@@ -251,6 +251,9 @@
 
 ## 2026-09-26 真实验证与最终验收更新
 
+- 后续复验 8c12e88255af4a8ca4acadf05c2b8d1c 真 C 链路 SUCCESS：三份 Jev、两份 LLM 均 AVAILABLE；两股 AVOID，零目标、零订单合法。原失败根因未复现，成功不覆盖旧失败或证明模型长期稳定。
+- 上游冻结日历明确2026-09-25休市、9/28开市，pretrade_date为9/24；不凭星期或自然日推断下一成交日。新前向账户已隔离初始化，未来首日尚未执行。
+
 - 最终独立审查发现并修复 3 项 Important：整数红股尾仓 EXIT 的虚假完成、真实网络错误未接重试、V2 外层公司行为绑定篡改绕过。全部裁定及证据保存在 docs/validation/2026-09-26-forward-review.md；未放松模型契约或重跑整套。
 
 - 九项权限/模型合成契约实际 AVAILABLE；DeepSeek 旧 chat 的成功不算版本升级证据，显式 flash 契约通过。官方发布：[V4.1 Flash](https://api-docs.deepseek.com/news/news260910/)。
