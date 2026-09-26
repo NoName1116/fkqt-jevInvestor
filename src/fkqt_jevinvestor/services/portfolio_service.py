@@ -7,6 +7,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from fkqt_jevinvestor.domain.forward import TradingDayProofV1
 from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot
 
 MONEY_QUANTUM = Decimal("0.01")
@@ -35,6 +36,13 @@ class ExecuteTradeDate(BaseModel):
 
 class AssetIdentityError(RuntimeError):
     pass
+
+
+class ExecuteCashOnlyDate(ExecuteTradeDate):
+    market_snapshots: Mapping[str, MarketExecutionSnapshot] = Field(default_factory=dict)
+    start_date: date
+    calendar_proof: TradingDayProofV1
+    execution_input_hash: str | None = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 @dataclass

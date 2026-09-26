@@ -1,4 +1,5 @@
 import hashlib
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 from typing import cast
@@ -6,6 +7,7 @@ from typing import cast
 import pyarrow.parquet as pq
 
 from fkqt_jevinvestor.domain.forward import TradingDayProofV1
+from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot
 from fkqt_jevinvestor.ingestion.execution_bundle_v2 import ExecutionBundleV2
 from fkqt_jevinvestor.ingestion.fkqt_execution_manifest import REQUIRED_FIELDS
 from fkqt_jevinvestor.ingestion.fkqt_manifest import DatasetManifest, FkqtBundleError
@@ -81,7 +83,7 @@ def load_fkqt_execution_manifest_v2(
         proof.verify(trade_date)
     except ValueError as exc:
         raise FkqtBundleError(str(exc)) from exc
-    snapshots = {}
+    snapshots: Mapping[str, MarketExecutionSnapshot] = {}
     if rows:
         snapshots = _load_fkqt_execution_manifest(
             root, trade_date, required_symbols, dataset_version="TUSHARE_EXECUTION_V2",

@@ -167,6 +167,19 @@ JSON 字段：`decision_run_count`、`decision_run_ids`、`market_snapshot_hashe
 | 资产恒等式 | 误差不超过 0.01 CNY | 查询 NAV 与组合持仓市值 | 必须 |
 | 外部券商订单 | 0 条 | 检查接口和网络配置 | 必须 |
 
-## 9. 已知限制
+## 9. 前向基础扩展（2026-09-26）
+
+新 FKQT `execution --schema-version 2` 接受空证券文件，以独立 `trade_cal` Manifest 证明开市；旧 V1 不变。先 `daily prepare-execution --manifest-root`，再 `daily execute --start-date`，首次纯现金 NAV 必须在显式 start-date，后续日期与冻结前一交易日匹配。尚未补齐权益账本前不可启用持续调度。
+
+```powershell
+$pythonExe = 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor/.venv/Scripts/python.exe'
+$env:PYTHONPATH = 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/src'
+Set-Location -LiteralPath 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner'
+& $pythonExe -m fkqt_jevinvestor daily prepare-candidates --trade-date 2026-09-25 --candidate-limit 2 --manifest-root 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/data/fkqt/decision/2026-09-25' --output-root 'C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/data/candidates'
+```
+
+日期、容量和数据根须对应实际已发布快照；命令输出 queue_ref 的绝对路径。将该路径传给 `daily close --candidate-queue`；队列与环境变量冲突返回 `CANDIDATE_QUEUE_CONFIG_CONFLICT`，来源变化返回 `CANDIDATE_QUEUE_SOURCE_MISMATCH`。不再手工同步候选代码，队列来源仍由外部选股流程提供，不引入新选股算法。
+
+## 10. 已知限制（旧 V1 与未交付运行部分）
 
 本阶段接入的是 FKQT 不可变文件快照，不是 REST Adapter。候选队列文件仍由外部选股流程明确提供；外部调度器、真实 Tushare 权限验证和告警发送仍未交付。若持仓与待执行订单均为空，`required-symbols` 输出空文件，当前执行发布器不接受空证券集合；该现金空仓日需在正式前向值守方案中明确处理，不能静默跳过 NAV。`daily close` 只编排 C 组，A/B/D 属于后续对照实验；回测接口与沙耶代码未修改。

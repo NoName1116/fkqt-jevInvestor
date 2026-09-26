@@ -33,6 +33,7 @@ from fkqt_jevinvestor.services.execution_engine import (
 )
 from fkqt_jevinvestor.services.portfolio_service import (
     CreatePortfolio,
+    ExecuteCashOnlyDate,
     ExecuteTradeDate,
     NavState,
     PortfolioLedger,
@@ -551,6 +552,16 @@ class PortfolioRepository:
             )).all())
         return tuple(_stored_order(item) for item in records)
 
+    async def execute_cash_only_date(self, command: ExecuteCashOnlyDate) -> ExecutionBatchResult:
+        if command.execution_input_hash is None:
+            raise ValueError("CASH_ONLY_INPUT_HASH_REQUIRED")
+        command.calendar_proof.verify(command.trade_date)
+        if command.trade_date < command.start_date:
+            raise ValueError("CASH_ONLY_BEFORE_START")
+        if command.market_snapshots:
+            raise ValueError("CASH_ONLY_NONEMPTY_INPUT")
+        return await self.execute_trade_date(command)
+
     async def execute_trade_date(self, command: ExecuteTradeDate) -> ExecutionBatchResult:
         try:
             async with self._session_factory.begin() as session:
@@ -589,6 +600,33 @@ class PortfolioRepository:
                 if existing_nav is not None:
                     portfolio.version = command.expected_version
                     return await self._existing_execution(session, command, order_records)
+
+                if isinstance(command, ExecuteCashOnlyDate):
+                    command.calendar_proof.verify(command.trade_date)
+                    if command.execution_input_hash is None:
+                        raise ValueError("CASH_ONLY_INPUT_HASH_REQUIRED")
+                    if command.trade_date < command.start_date:
+                        raise ValueError("CASH_ONLY_BEFORE_START")
+                    if command.market_snapshots:
+                        raise ValueError("CASH_ONLY_NONEMPTY_INPUT")
+                    held = await session.scalar(select(PositionRecord.id).where(
+                        PositionRecord.portfolio_id == command.portfolio_id,
+                        PositionRecord.quantity > 0,
+                    ).limit(1))
+                    lot = await session.scalar(select(PositionLotRecord.id).where(
+                        PositionLotRecord.portfolio_id == command.portfolio_id,
+                        PositionLotRecord.remaining_quantity > 0,
+                    ).limit(1))
+                    if held is not None or lot is not None or order_records:
+                        raise ValueError("CASH_ONLY_PORTFOLIO_NOT_EMPTY")
+                    previous = await session.scalar(select(NavRecord.valuation_date).where(
+                        NavRecord.portfolio_id == command.portfolio_id,
+                    ).order_by(NavRecord.valuation_date.desc()).limit(1))
+                    if previous is None:
+                        if command.trade_date != command.start_date:
+                            raise ValueError("DAILY_EXECUTION_HISTORY_GAP")
+                    elif previous != command.calendar_proof.previous_trade_date:
+                        raise ValueError("DAILY_EXECUTION_HISTORY_GAP")
 
                 ledger = await self._ledger(session, portfolio)
                 result = execute_order_batch(

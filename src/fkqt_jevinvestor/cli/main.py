@@ -12,16 +12,19 @@ from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
 
 from fkqt_jevinvestor.config import Settings
+from fkqt_jevinvestor.domain.candidate_queue import CandidateQueueV1
 from fkqt_jevinvestor.domain.decision import PendingOrderSummaryV1
 from fkqt_jevinvestor.domain.execution import VirtualOrderStatus
 from fkqt_jevinvestor.domain.market import MarketExecutionSnapshot
 from fkqt_jevinvestor.domain.market_time import market_close
+from fkqt_jevinvestor.ingestion.candidate_queue import CandidateQueueStore, prepare_candidate_queue
 from fkqt_jevinvestor.ingestion.canonical import sha256_json
 from fkqt_jevinvestor.ingestion.execution_bundle import (
     ExecutionBundleStore,
     ExecutionBundleV1,
     load_execution_bundle,
 )
+from fkqt_jevinvestor.ingestion.execution_bundle_v2 import ExecutionBundleV2
 from fkqt_jevinvestor.ingestion.fkqt_execution_manifest import load_fkqt_execution_manifest
 from fkqt_jevinvestor.ingestion.fkqt_manifest import FkqtBundleError, FkqtManifestProvider
 from fkqt_jevinvestor.ingestion.snapshot_store import MarketSnapshotStore
@@ -46,7 +49,7 @@ from fkqt_jevinvestor.services.jev_market_service import (
     JevRunCommandV1,
 )
 from fkqt_jevinvestor.services.market_pipeline import MarketPipeline
-from fkqt_jevinvestor.services.portfolio_service import ExecuteTradeDate
+from fkqt_jevinvestor.services.portfolio_service import ExecuteCashOnlyDate, ExecuteTradeDate
 from fkqt_jevinvestor.services.position_sizing import PositionSizingConfigV1
 
 
@@ -69,8 +72,9 @@ def stable_daily_run_id(
     candidate_limit: int,
     portfolio_version: int,
     provider_identity: str = "",
+    candidate_queue_hash: str | None = None,
 ) -> UUID:
-    identity = sha256_json({
+    payload: dict[str, object] = {
         "portfolio_id": portfolio_id,
         "decision_date": decision_date.isoformat(),
         "snapshot_hash": snapshot_hash,
@@ -78,8 +82,47 @@ def stable_daily_run_id(
         "candidate_limit": candidate_limit,
         "portfolio_version": portfolio_version,
         "provider_identity": provider_identity,
-    })
+    }
+    if candidate_queue_hash is not None:
+        payload["candidate_queue_hash"] = candidate_queue_hash
+    identity = sha256_json(payload)
     return uuid5(NAMESPACE_URL, f"fkqt-jevinvestor:daily:v1:{identity}")
+
+
+def _resolve_daily_candidates(
+    args: argparse.Namespace, settings: Settings,
+) -> tuple[tuple[str, ...], CandidateQueueV1 | None]:
+    configured = tuple(s.strip().upper() for s in (settings.c_group_candidate_symbols or "").split(",") if s.strip())
+    path = getattr(args, "candidate_queue", None)
+    if path is None:
+        return configured, None
+    queue = CandidateQueueStore.load(Path(path))
+    if queue.trade_date != args.decision_date or queue.candidate_limit != args.candidate_limit:
+        raise ValueError("CANDIDATE_QUEUE_CONFIG_CONFLICT")
+    if configured and configured != queue.ordered_symbols:
+        raise ValueError("CANDIDATE_QUEUE_CONFIG_CONFLICT")
+    if settings.fkqt_manifest_bundle_root is None:
+        raise ValueError("FKQT_MANIFEST_BUNDLE_ROOT_REQUIRED")
+    source = prepare_candidate_queue(settings.fkqt_manifest_bundle_root, args.decision_date, args.candidate_limit)
+    if source.content_hash != queue.content_hash:
+        raise ValueError("CANDIDATE_QUEUE_SOURCE_MISMATCH")
+    return queue.ordered_symbols, queue
+
+
+def _prepare_candidates(args: argparse.Namespace, settings: Settings) -> int:
+    try:
+        root = Path(args.manifest_root) if args.manifest_root else settings.fkqt_manifest_bundle_root
+        if root is None:
+            raise ValueError("FKQT_MANIFEST_BUNDLE_ROOT_REQUIRED")
+        queue = prepare_candidate_queue(root, args.trade_date, args.candidate_limit)
+        path = CandidateQueueStore(Path(args.output_root)).save(queue)
+        print(json.dumps({"queue_ref": str(path.resolve()), "queue_hash": queue.content_hash,
+                          "symbol_count": len(queue.ordered_symbols)}, sort_keys=True))
+        return 0
+    except (OSError, RuntimeError, ValueError) as exc:
+        message = str(exc)
+        print(message if message.isupper() else type(exc).__name__, file=sys.stderr)
+        return 2
 
 
 def _prepare_execution(args: argparse.Namespace, settings: Settings) -> int:
@@ -252,6 +295,7 @@ async def _run_c_group(
                 portfolio.version,
                 f"{settings.typesafe_model}:{settings.deepseek_base_url}:"
                 f"{settings.deepseek_model}:{settings.deepseek_reasoning_effort}",
+                candidate_queue_hash=getattr(args, "candidate_queue_hash", None),
             )
             if stable_run else uuid4()
         )
@@ -310,6 +354,13 @@ async def _run_c_group(
             Decimal(0),
         )
         decision_provider_version = "deepseek-responses-v1"
+        queue = getattr(args, "candidate_queue_data", None)
+        if isinstance(queue, CandidateQueueV1):
+            queue.verify()
+            _write_required_symbols_file(
+                settings.market_snapshot_root.parent / "daily_audits" / str(run_id) / "candidate-queue.json",
+                queue.model_dump_json() + "\n",
+            )
         decision_service = CGroupDecisionService(
             provider=DeepSeekDecisionProvider.from_api_key(
                 api_key=settings.deepseek_api_key,
@@ -371,11 +422,14 @@ async def _daily_close(args: argparse.Namespace, settings: Settings) -> int:
     if settings.fkqt_manifest_bundle_root is None:
         print("FKQT_MANIFEST_BUNDLE_ROOT_REQUIRED", file=sys.stderr)
         return 2
-    candidates = tuple(
-        symbol.strip().upper()
-        for symbol in (settings.c_group_candidate_symbols or "").split(",")
-        if symbol.strip()
-    )
+    try:
+        candidates, queue = _resolve_daily_candidates(args, settings)
+    except (OSError, RuntimeError, ValueError) as exc:
+        message = str(exc)
+        print(message if message.isupper() else type(exc).__name__, file=sys.stderr)
+        return 2
+    args.candidate_queue_hash = queue.content_hash if queue else None
+    args.candidate_queue_data = queue
     if not candidates or len(candidates) != len(set(candidates)) or len(candidates) > args.candidate_limit:
         print("C_GROUP_CANDIDATE_CONFIG_INVALID", file=sys.stderr)
         return 2
@@ -425,6 +479,7 @@ async def _daily_close(args: argparse.Namespace, settings: Settings) -> int:
             portfolio.version,
             f"{settings.typesafe_model}:{settings.deepseek_base_url}:"
             f"{settings.deepseek_model}:{settings.deepseek_reasoning_effort}",
+            candidate_queue_hash=getattr(args, "candidate_queue_hash", None),
         )
         async with session_factory() as session:
             existing_runs = tuple((await session.scalars(
@@ -482,14 +537,15 @@ async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
                             PositionSizingRunRecord.planned_execution_date == args.trade_date,
                         ).limit(1)
                     )
-                if not due and scheduled is None:
+                if not due and scheduled is None and not (
+                    isinstance(bundle, ExecutionBundleV2) and not bundle.snapshots
+                ):
                     raise ValueError("DAILY_EXECUTION_NOT_SCHEDULED")
                 required = {item.symbol for item in state.positions if item.quantity > 0}
                 required.update(item.symbol for item in open_orders)
             bundle.verify(args.trade_date, required)
             frozen_path = ExecutionBundleStore(settings.execution_bundle_root).save(bundle)
-            result = await repository.execute_trade_date(
-                ExecuteTradeDate(
+            command = ExecuteTradeDate(
                     portfolio_id=args.portfolio_id,
                     trade_date=args.trade_date,
                     expected_version=state.version,
@@ -497,7 +553,16 @@ async def _daily_execute(args: argparse.Namespace, settings: Settings) -> int:
                     execution_input_hash=bundle.content_hash,
                     execution_source_manifest_id=bundle.source_manifest_id,
                 )
-            )
+            if isinstance(bundle, ExecutionBundleV2) and not bundle.snapshots:
+                start_date = getattr(args, "start_date", None)
+                if start_date is None:
+                    raise ValueError("CASH_ONLY_START_DATE_REQUIRED")
+                result = await repository.execute_cash_only_date(ExecuteCashOnlyDate(
+                    **command.model_dump(), start_date=start_date,
+                    calendar_proof=bundle.calendar_proof,
+                ))
+            else:
+                result = await repository.execute_trade_date(command)
             print(json.dumps({
                 "portfolio_id": args.portfolio_id,
                 "trade_date": args.trade_date.isoformat(),
@@ -614,6 +679,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     c_group_parser.add_argument("--candidate-limit", type=_positive_int, required=True)
     daily_parser = subparsers.add_parser("daily")
     daily_subparsers = daily_parser.add_subparsers(dest="daily_command", required=True)
+    queue_parser = daily_subparsers.add_parser("prepare-candidates")
+    queue_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
+    queue_parser.add_argument("--candidate-limit", type=_positive_int, required=True)
+    queue_parser.add_argument("--manifest-root")
+    queue_parser.add_argument("--output-root", required=True)
     prepare_parser = daily_subparsers.add_parser("prepare-execution")
     prepare_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
     prepare_source = prepare_parser.add_mutually_exclusive_group(required=True)
@@ -627,10 +697,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     close_parser.add_argument("--date", dest="decision_date", type=date.fromisoformat, required=True)
     close_parser.add_argument("--portfolio-id", required=True)
     close_parser.add_argument("--candidate-limit", type=_positive_int, required=True)
+    close_parser.add_argument("--candidate-queue")
     execute_parser = daily_subparsers.add_parser("execute")
     execute_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
     execute_parser.add_argument("--portfolio-id", required=True)
     execute_parser.add_argument("--execution-bundle", required=True)
+    execute_parser.add_argument("--start-date", type=date.fromisoformat)
     status_parser = daily_subparsers.add_parser("status")
     status_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
     status_parser.add_argument("--portfolio-id", required=True)
@@ -638,6 +710,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "version":
         print("fkqt-jevinvestor 0.1.0")
         return 0
+    if args.command == "daily" and args.daily_command == "prepare-candidates":
+        return _prepare_candidates(args, Settings())
     if args.command == "market" and args.market_command == "freeze":
         return asyncio.run(_freeze_manifest(args, Settings()))
     if args.command == "decision" and args.decision_command == "run-c-group":

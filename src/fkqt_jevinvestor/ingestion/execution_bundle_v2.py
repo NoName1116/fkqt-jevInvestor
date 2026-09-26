@@ -48,7 +48,7 @@ class ExecutionBundleV2(BaseModel):
         if self.trade_date != trade_date:
             raise ValueError("EXECUTION_BUNDLE_DATE_MISMATCH")
         self.calendar_proof.verify(trade_date)
-        if not required_symbols.issubset(self.snapshots):
+        if not set(required_symbols).issubset(self.snapshots):
             raise ValueError("EXECUTION_SYMBOL_COVERAGE_INCOMPLETE")
         for symbol, snapshot in self.snapshots.items():
             if symbol != snapshot.symbol or snapshot.trade_date != trade_date:
