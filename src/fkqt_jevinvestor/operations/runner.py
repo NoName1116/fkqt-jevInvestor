@@ -4,7 +4,7 @@ import os
 import time as clock
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -51,6 +51,13 @@ class ForwardRunner:
         self.env = env if env is not None else dict(os.environ)
 
     async def run_once(self, config: ForwardOperationConfig, trade_date: date, now: datetime) -> ForwardRunOutcome:
+        if now.tzinfo is None:
+            raise ValueError("FORWARD_TIMEZONE_REQUIRED")
+        local = now.astimezone(CHINA_STANDARD_TIME)
+        if trade_date > local.date():
+            return ForwardRunOutcome("BLOCKED", (), "FORWARD_FUTURE_DATE")
+        if trade_date == local.date() and local.time() < time(15):
+            return ForwardRunOutcome("BLOCKED", (), "FORWARD_BEFORE_MARKET_CLOSE")
         outcome = await self._run_once(config, trade_date, now)
         if outcome.error_code in {"FORWARD_PROVIDER_DEGRADED", "FORWARD_DATA_DEGRADED"}:
             outcome = ForwardRunOutcome("DEGRADED", outcome.completed_stages, outcome.error_code)
