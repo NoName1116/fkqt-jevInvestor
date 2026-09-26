@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -182,6 +182,7 @@ class DecisionProviderResult(BaseModel):
     output: DecisionModelOutputV1
     raw_response_text: str = Field(min_length=1, max_length=4096)
     raw_response_hash: str = Field(min_length=64, max_length=64)
+    usage: dict[str, int] | None = Field(default=None, exclude=True)
 
 
 class DecisionEvaluationV1(BaseModel):
@@ -192,6 +193,8 @@ class DecisionEvaluationV1(BaseModel):
     input_hash: str = Field(min_length=64, max_length=64)
     symbol: str = Field(min_length=1)
     status: DecisionEvaluationStatus
+    diagnostic: dict[str, Any] | None = Field(default=None, exclude=True)
+    usage: dict[str, int] | None = Field(default=None, exclude=True)
     action: DecisionAction
     thesis: str | None = Field(default=None, min_length=1, max_length=240)
     invalidation: str | None = Field(default=None, min_length=1, max_length=240)

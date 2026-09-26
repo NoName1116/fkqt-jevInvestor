@@ -26,6 +26,7 @@ from fkqt_jevinvestor.providers.jev_market_questions import (
     QUESTION_DEFINITIONS,
     build_jev_market_questions,
 )
+from fkqt_jevinvestor.providers.diagnostics import REASONS, build_jev_diagnostic, safe_usage
 
 
 class SystemOneMarketClient(Protocol):
@@ -114,9 +115,8 @@ class TypeSafeJevMarketProvider:
         try:
             results = self._results(response, command.scope)
         except ProviderContractError as exc:
-            if exc.response_hash is not None:
-                raise
-            raise ProviderContractError(str(exc), response_hash=response_hash) from exc
+            raise ProviderContractError(str(exc), response_hash=response_hash,
+                diagnostic=build_jev_diagnostic(response, command, (str(exc),)), usage=safe_usage(response)) from exc
         except (
             ValidationError,
             ValueError,
@@ -125,9 +125,15 @@ class TypeSafeJevMarketProvider:
             AttributeError,
             InvalidOperation,
         ) as exc:
+            codes = tuple(
+                str(item.get("ctx", {}).get("error", ""))
+                for item in exc.errors(include_input=False)
+            ) if isinstance(exc, ValidationError) else ("JEV_RESPONSE_CONTRACT_INVALID",)
             raise ProviderContractError(
                 "JEV_RESPONSE_CONTRACT_INVALID",
                 response_hash=response_hash,
+                diagnostic=build_jev_diagnostic(response, command, tuple(code for code in codes if code in REASONS)),
+                usage=safe_usage(response),
             ) from exc
 
         finished_at = datetime.now(UTC)
@@ -154,6 +160,8 @@ class TypeSafeJevMarketProvider:
             finished_at=finished_at,
             latency_ms=latency_ms,
             error_code=None,
+            diagnostic=build_jev_diagnostic(response, command, ()),
+            usage=safe_usage(response),
         )
 
     async def health(self) -> ProviderHealth:

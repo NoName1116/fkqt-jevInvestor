@@ -313,6 +313,7 @@ class CGroupDecisionService:
                 started_at,
                 started,
                 exc.response_hash,
+                exc.usage,
             )
 
         finished_at = datetime.now(UTC)
@@ -327,6 +328,7 @@ class CGroupDecisionService:
             invalidation=result.output.invalidation,
             raw_response_text=result.raw_response_text,
             raw_response_hash=result.raw_response_hash,
+            usage=result.usage,
             provider_name=command.provider_name,
             provider_version=command.provider_version,
             model_id=command.model_id,
@@ -360,6 +362,7 @@ class CGroupDecisionService:
         started_at: datetime,
         _started: float,
         response_hash: str | None = None,
+        usage: dict[str, int] | None = None,
     ) -> DecisionEvaluationV1:
         return await self._decision_repository.record_failure(
             claim,
@@ -368,4 +371,5 @@ class CGroupDecisionService:
             started_at=started_at,
             finished_at=datetime.now(UTC),
             raw_response_hash=response_hash,
+            usage=usage,
         )

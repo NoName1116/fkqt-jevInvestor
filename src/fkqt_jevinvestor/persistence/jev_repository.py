@@ -211,7 +211,7 @@ class JevEvaluationRepository:
         claim: JevClaim,
         result: JevEvaluationV1,
     ) -> JevEvaluationV1:
-        result = JevEvaluationV1.model_validate(result.model_dump())
+        result = JevEvaluationV1.model_validate({**result.model_dump(), "diagnostic": result.diagnostic, "usage": result.usage})
         if result.status is not JevEvaluationStatus.AVAILABLE:
             raise ValueError("JEV_SUCCESS_STATUS_REQUIRED")
         async with self._session_factory.begin() as session:
@@ -247,7 +247,7 @@ class JevEvaluationRepository:
         claim: JevClaim,
         result: JevEvaluationV1,
     ) -> JevEvaluationV1:
-        result = JevEvaluationV1.model_validate(result.model_dump())
+        result = JevEvaluationV1.model_validate({**result.model_dump(), "diagnostic": result.diagnostic, "usage": result.usage})
         if result.status in {
             JevEvaluationStatus.AVAILABLE,
             JevEvaluationStatus.IN_PROGRESS,
@@ -579,6 +579,8 @@ class JevEvaluationRepository:
         attempt.status = result.status.value
         attempt.raw_response_hash = result.raw_response_hash
         attempt.error_code = result.error_code
+        attempt.diagnostic_json = result.diagnostic
+        attempt.usage_json = result.usage
 
     @staticmethod
     def _expire_attempt(attempt: JevAttemptRecord, now: datetime) -> None:

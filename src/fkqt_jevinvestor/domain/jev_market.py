@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -329,6 +329,9 @@ class JevEvaluationV1(BaseModel):
     finished_at: datetime
     latency_ms: int = Field(ge=0)
     error_code: str | None = None
+
+    diagnostic: dict[str, Any] | None = Field(default=None, exclude=True)
+    usage: dict[str, int] | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def validate_scope_and_status(self) -> Self:

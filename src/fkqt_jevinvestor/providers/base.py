@@ -19,9 +19,11 @@ class ProviderUnavailableError(RuntimeError):
 
 
 class ProviderContractError(RuntimeError):
-    def __init__(self, message: str, response_hash: str | None = None) -> None:
+    def __init__(self, message: str, response_hash: str | None = None, *, diagnostic: dict[str, Any] | None = None, usage: dict[str, int] | None = None) -> None:
         super().__init__(message)
         self.response_hash = response_hash
+        self.diagnostic = diagnostic
+        self.usage = usage
 
 
 class ProviderHealth(BaseModel):

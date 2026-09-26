@@ -19,6 +19,7 @@ from fkqt_jevinvestor.providers.decision_prompt import (
     build_decision_messages,
     decision_output_json_schema,
 )
+from fkqt_jevinvestor.providers.diagnostics import safe_usage
 
 
 class ResponsesResource(Protocol):
@@ -103,7 +104,11 @@ class DeepSeekDecisionProvider:
             )
         except Exception as exc:
             raise ProviderUnavailableError(type(exc).__name__) from exc
-        return self._parse_response(response, command)
+        try:
+            return self._parse_response(response, command).model_copy(update={"usage": safe_usage(response)})
+        except ProviderContractError as exc:
+            exc.usage = safe_usage(response)
+            raise
 
     def _validate_command(self, command: DecisionEvaluationCommand) -> None:
         if (

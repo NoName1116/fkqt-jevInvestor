@@ -416,6 +416,10 @@ class JevAttemptRecord(Base):
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
+    diagnostic_json: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    usage_json: Mapped[dict[str, int] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+
+
 class JevQuestionResultRecord(Base):
     __tablename__ = "ai_signal_jev_question_result"
     __table_args__ = (
@@ -538,6 +542,10 @@ class DecisionAttemptRecord(Base):
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
+    diagnostic_json: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    usage_json: Mapped[dict[str, int] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+
+
 class DecisionRunLinkRecord(Base):
     __tablename__ = "ai_signal_llm_decision_run_link"
     __table_args__ = (
@@ -608,3 +616,19 @@ class PositionTargetRecord(Base):
     target_position_pct: Mapped[Decimal] = mapped_column(RATIO)
     signal_action: Mapped[str] = mapped_column(String(16))
     block_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class ForwardRecoveryRecord(Base):
+    __tablename__ = "ai_signal_forward_recovery"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(String(40))
+    trade_date: Mapped[date] = mapped_column(Date)
+    stage_id: Mapped[str] = mapped_column(String(64))
+    stage: Mapped[str] = mapped_column(String(32))
+    config_hash: Mapped[str] = mapped_column(String(64))
+    expected_stage_hash: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(String(256))
+    previous_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

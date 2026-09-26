@@ -146,7 +146,7 @@ class DecisionEvaluationRepository:
         claim: DecisionClaim,
         result: DecisionEvaluationV1,
     ) -> DecisionEvaluationV1:
-        result = DecisionEvaluationV1.model_validate(result.model_dump())
+        result = DecisionEvaluationV1.model_validate({**result.model_dump(), "diagnostic": result.diagnostic, "usage": result.usage})
         if result.status is not DecisionEvaluationStatus.AVAILABLE:
             raise ValueError("DECISION_SUCCESS_STATUS_REQUIRED")
         async with self._session_factory.begin() as session:
@@ -172,6 +172,7 @@ class DecisionEvaluationRepository:
         started_at: datetime,
         finished_at: datetime,
         raw_response_hash: str | None = None,
+        usage: dict[str, int] | None = None,
     ) -> DecisionEvaluationV1:
         if status in {
             DecisionEvaluationStatus.AVAILABLE,
@@ -193,6 +194,7 @@ class DecisionEvaluationRepository:
                 invalidation=None,
                 raw_response_text=None,
                 raw_response_hash=raw_response_hash,
+                usage=usage,
                 provider_name=record.provider_name,
                 provider_version=record.provider_version,
                 model_id=record.model_id,
@@ -583,6 +585,8 @@ class DecisionEvaluationRepository:
         attempt.status = result.status.value
         attempt.raw_response_hash = result.raw_response_hash
         attempt.error_code = result.error_code
+        attempt.diagnostic_json = result.diagnostic
+        attempt.usage_json = result.usage
 
     @staticmethod
     def _expire_attempt(attempt: DecisionAttemptRecord, now: datetime) -> None:

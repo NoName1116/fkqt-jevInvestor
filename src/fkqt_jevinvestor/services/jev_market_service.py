@@ -181,6 +181,7 @@ class JevMarketEvaluationService:
                 finished_at=finished_at,
                 latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
             )
+            failure = failure.model_copy(update={"diagnostic": exc.diagnostic, "usage": exc.usage})
             return await self._repository.record_failure(claim, failure)
         return await self._repository.record_success(claim, result)
 
