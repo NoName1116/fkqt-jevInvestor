@@ -17,5 +17,6 @@
 - 前向、权益和调度完整手册：[`docs/runbooks/forward-operations.md`](docs/runbooks/forward-operations.md)。
 - 本阶段实际验收边界：[`docs/validation/2026-09-26-forward-operations.md`](docs/validation/2026-09-26-forward-operations.md)。
 - 回测接入：`FrozenCGroupTargetProvider` 只读取内容寻址冻结目标，不调用外部模型或数据库。
+- 独立研究接线：`research export/verify/targets/compare`，四组 A/B/C/D、冻结审计、严格原持仓重放与回测执行适配；[完整操作和沙耶接口](docs/runbooks/research-bridge.md)。不包含沙耶的回测引擎，收益有效性尚未验证。
 
 默认决策模型为 `deepseek-flash`，推理强度为 `high`。API Key 只从本地未跟踪 `.env` 或进程环境加载，不得写入 Git、命令历史、日志或数据库。调度脚本未自动安装；真实历史来源重放不等于持续前向，真实 Provider 不合约时保留 NO_SIGNAL 并降级。

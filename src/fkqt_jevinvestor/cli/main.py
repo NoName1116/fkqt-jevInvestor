@@ -684,6 +684,9 @@ async def _daily_status(args: argparse.Namespace, settings: Settings) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fkqt-jevinvestor")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    from fkqt_jevinvestor.research.cli import register_research
+
+    register_research(subparsers)
     forward_parser = subparsers.add_parser("forward")
     forward_commands = forward_parser.add_subparsers(dest="forward_command", required=True)
     report_parser = forward_commands.add_parser("report")
@@ -759,6 +762,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     status_parser.add_argument("--trade-date", type=date.fromisoformat, required=True)
     status_parser.add_argument("--portfolio-id", required=True)
     args = parser.parse_args(argv)
+    if args.command == "research":
+        from fkqt_jevinvestor.research.cli import execute_research
+
+        return asyncio.run(execute_research(args))
     if args.command == "forward":
         from fkqt_jevinvestor.operations.cli import execute_forward
 

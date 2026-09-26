@@ -1,0 +1,24 @@
+{
+  "rule_version": "trend-baseline-v1",
+  "direct_version": "jev-action-map-v1",
+  "prompt_version": "research-decision-prompt-v1",
+  "probability_threshold": "0.6",
+  "next_profit_threshold": "0.5",
+  "sizing": {
+    "daily_risk_budget": "0.00200000",
+    "volatility_floor": "0.01000000",
+    "max_single_position_pct": "0.10000000",
+    "max_gross_position_pct": "0.80000000",
+    "min_cash_pct": "0.20000000",
+    "min_entry_position_pct": "0.01000000",
+    "liquidity_entry_floor": "0.20000000",
+    "weight_quantum": "0.00000001"
+  },
+  "jev_model": "jev-latest",
+  "jev_version": "0.7.0",
+  "llm_model": "deepseek-flash",
+  "llm_version": "deepseek-responses-v1",
+  "llm_base_url": "https://api.deepseek.com",
+  "reasoning_effort": "high",
+  "timeout_seconds": 30
+}

@@ -15,6 +15,9 @@ class MarketSnapshotStore:
     def __init__(self, root: Path) -> None:
         self.root = root
 
+    def validate(self, snapshot: MarketSnapshot) -> None:
+        self._validate(snapshot)
+
     def save(self, snapshot: MarketSnapshot) -> Path:
         self._validate(snapshot)
         destination = self._path(snapshot.decision_date, snapshot.content_hash)

@@ -1,5 +1,13 @@
 # AI Signal Lab 调研与决策记录
 
+## 2026-09-27 最新研究接线验收
+
+- 已完成 R65–R69，本轮只读导出及 A 组目标/冻结重放的真实 CLI 命令通过，源库 SHA256 前后一致。
+- 独立审查发现4项重要问题：历史配置/持仓分支混入、缺证券状态仍发布、持有日少算当前日、比较只看仓位版本；分别补测试并修复。配置和历史链严格隔离，歧义/回填拒绝，持有天数包括当前执行日，比较必需实际审计参数。
+- 一次受影响回归91/91通过；Ruff全通过，Pyright 0 errors/0 warnings。保留用户未跟踪缓存，未修改沙耶目录或旧契约。
+- 不把测试目标、合成行情和比较差值当作真实收益证据；尚未消耗API额度，尚未联合回测引擎或启动持续前向。旧回测接口遇到公司行为仍拒绝，前向V2权益能力不受影响。
+- 完整命令、33份交付文件绝对路径与限制见 docs/validation/2026-09-27-research-bridge.md。
+
 日期：2026-09-21
 
 ## 已核实事实
@@ -277,3 +285,10 @@
 - 全部实际usage、历史价格身份、CNY与NAV完整时才算扣模型估算费用收益；100资金/100NAV/4费用→-0.04，未知仍null。
 - 本轮受影响103项首跑102通过/1迁移断言失败，失败项修后通过；新边界20项19通过/1缓存审计失败，失败项修后通过；最终29Python文件静态零错误。只一份fresh最终审查，无第二审查席位。
 - 历史验收副本report-copy.db升级0010，原replay.db和未激活forward.db仍0009。future阻断、默认预览和重复报告后副本hash不变。报告UNVERIFIED/PENDING_LABELS，配置证据不一致时不下收益结论。
+# 2026-09-26 研究接线调查
+
+- 已确认现有 linked worktree，分支 feature/forward-operations，起点 a36537e，tracked clean。
+- 复用已有 MarketSnapshotStore、ExecutionBundle、Jev state builder/Provider、position sizing、PortfolioLedger/执行引擎。现有四组仅枚举，C 冻结目标缺导出 CLI。
+- 比较成熟实现：[Backtrader Broker](https://www.backtrader.com/docu/broker/) 与 [VectorBT Portfolio](https://vectorbt.dev/api/portfolio/base/)。本轮不替换引擎：替换会改变冻结成本/成交口径并越过沙耶边界，选择复用本项目已验证的核心规则与官方 SDK。
+- 关键边界：历史目标依赖原持仓；旧 ReplayDay 无公司行为权益/FIFO lots，新增适配必须显式拒绝不支持状态而非伪造权益和成本。
+- 沿用用户“执行中不暂停”“少跑测试、只重测失败项”要求，设计与计划落盘后直接执行，不追加逐阶段确认。
