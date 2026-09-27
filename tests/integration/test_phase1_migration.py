@@ -72,8 +72,8 @@ def test_phase1_migration_is_namespaced_constrained_and_reversible(tmp_path: Pat
     database = tmp_path / "phase1.db"
     config = migration_config(database)
 
-    command.upgrade(config, "head")
-    command.upgrade(config, "head")
+    command.upgrade(config, "0003_phase1_audit_snapshot")
+    command.upgrade(config, "0003_phase1_audit_snapshot")
 
     with sqlite3.connect(database) as connection:
         assert tables(connection) == EXPECTED_AI_SIGNAL_TABLES | {"alembic_version"}

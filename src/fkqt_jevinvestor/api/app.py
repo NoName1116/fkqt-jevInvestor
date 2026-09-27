@@ -6,14 +6,17 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fkqt_jevinvestor.api.routes.market import build_market_router
 from fkqt_jevinvestor.api.routes.portfolios import PortfolioService, build_portfolio_router
 from fkqt_jevinvestor.config import Settings, get_settings
 from fkqt_jevinvestor.domain.enums import ProviderStatus
 from fkqt_jevinvestor.domain.market import MarketExecutionProvider
+from fkqt_jevinvestor.persistence.market_repository import MarketSnapshotRepository
 from fkqt_jevinvestor.persistence.repositories import PortfolioRepository
 from fkqt_jevinvestor.persistence.session import create_engine, create_session_factory
 from fkqt_jevinvestor.providers.base import ProviderHealth
 from fkqt_jevinvestor.providers.jev import JevSemanticFactorProvider
+from fkqt_jevinvestor.services.market_pipeline import MarketPipeline
 
 
 class HealthProvider(Protocol):
@@ -43,6 +46,7 @@ def create_app(
     database_probe: DatabaseProbe | None = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     market_execution_provider: MarketExecutionProvider | None = None,
+    market_pipeline: MarketPipeline | None = None,
 ) -> FastAPI:
     active_settings = settings or get_settings()
     active_database_probe = database_probe or _database_probe(active_settings.database_url)
@@ -68,6 +72,9 @@ def create_app(
             portfolio_service,
             include_fixture_routes=active_settings.environment in {"local", "test"},
         )
+    )
+    app.include_router(
+        build_market_router(MarketSnapshotRepository(active_session_factory), market_pipeline)
     )
 
     @app.exception_handler(Exception)

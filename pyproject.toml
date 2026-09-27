@@ -12,10 +12,12 @@ dependencies = [
   "aiosqlite>=0.20,<1",
   "fastapi>=0.115,<1",
   "httpx>=0.27,<1",
+  "openai>=2,<3",
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.5,<3",
+  "pyarrow>=17,<24",
   "sqlalchemy[asyncio]>=2.0,<3",
-  "typesafe-sdk>=0.1,<1",
+  "typesafe-sdk==0.7.0",
   "uvicorn[standard]>=0.30,<1",
 ]
 
@@ -25,6 +27,7 @@ fkqt-jevinvestor = "fkqt_jevinvestor.cli.main:main"
 [project.optional-dependencies]
 dev = [
   "pyright>=1.1,<2",
+  "pyarrow-stubs==20.0.0.20260819",
   "pytest>=8,<9",
   "pytest-asyncio>=0.24,<1",
   "ruff>=0.8,<1",

@@ -1,0 +1,13 @@
+{
+  "database_path": "C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/data/test-runs/research-recorded-fix2/test_export_formal_targets_pre0/source.db",
+  "dataset_id": "research-fixture",
+  "days": [
+    {
+      "decision_date": "2026-09-18",
+      "market_snapshot_hash": "7e496d26bfe146e057998b6ce2157a1be69937f5f95c41415555af7bba0b1bef",
+      "candidate_queue_path": "C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/data/test-runs/research-recorded-fix2/test_export_formal_targets_pre0/queue.json",
+      "execution_bundle_path": "C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/data/test-runs/research-recorded-fix2/test_export_formal_targets_pre0/execution.json",
+      "run_id": "35fd4cc4-1ad2-4f7b-844d-e371ad69fe7c"
+    }
+  ]
+}

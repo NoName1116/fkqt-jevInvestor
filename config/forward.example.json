@@ -1,0 +1,19 @@
+{
+  "portfolio_id": "forward-validation-c",
+  "start_date": "2026-09-28",
+  "fkqt_cwd": "C:/Users/1/Desktop/FKQTPRO/ai-signal-phase0/agent",
+  "fkqt_python": "C:/Users/1/Desktop/FKQT-pro/agent/.venv-codex/Scripts/python.exe",
+  "jev_cwd": "C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner",
+  "jev_python": "C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor/.venv/Scripts/python.exe",
+  "data_root": "C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/data/forward",
+  "candidate_source": "C:/Users/1/Desktop/FKQTPRO/fkqt-jevInvestor-phase5-daily-runner/config/forward-candidates.example.txt",
+  "candidate_limit": 2,
+  "readiness_deadline_local": "23:00:00",
+  "max_attempts": 4,
+  "process_timeout_seconds": 300,
+  "max_run_seconds": 600,
+  "typesafe_model": "jev-latest",
+  "deepseek_model": "deepseek-flash",
+  "deepseek_reasoning_effort": "high",
+  "webhook_url": null
+}

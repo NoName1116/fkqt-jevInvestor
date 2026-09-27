@@ -11,12 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from fkqt_jevinvestor.domain.execution import ExecutionPolicy, OrderSide, VirtualOrderStatus
 from fkqt_jevinvestor.domain.portfolio import PortfolioState, PositionState
 from fkqt_jevinvestor.domain.signals import FixtureSignalBatch, SignalAction, ValidatedSignalBatch
+from fkqt_jevinvestor.ingestion.canonical import sha256_json
+from fkqt_jevinvestor.persistence.corporate_action_repository import CorporateActionRepository
 from fkqt_jevinvestor.persistence.models import (
     NavRecord,
     PortfolioRecord,
     PortfolioSnapshotRecord,
     PositionLotRecord,
     PositionRecord,
+    PositionSizingRunRecord,
+    PositionTargetRecord,
     SignalBatchRecord,
     SignalRecord,
     VirtualFillRecord,
@@ -31,11 +35,16 @@ from fkqt_jevinvestor.services.execution_engine import (
 )
 from fkqt_jevinvestor.services.portfolio_service import (
     CreatePortfolio,
+    ExecuteCashOnlyDate,
     ExecuteTradeDate,
     NavState,
     PortfolioLedger,
     PortfolioSnapshot,
     PositionLot,
+)
+from fkqt_jevinvestor.services.position_sizing import (
+    PositionSizingConfigV1,
+    PositionSizingRunV1,
 )
 
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -135,7 +144,10 @@ class PortfolioRepository:
                 .order_by(NavRecord.valuation_date)
             )).all())
 
-        total_equity = portfolio.cash_balance + sum(
+        if as_of is not None and nav_dates and nav_dates[-1] > as_of:
+            raise PortfolioTransactionError("PORTFOLIO_HISTORICAL_STATE_UNAVAILABLE")
+
+        total_equity = portfolio.cash_balance + portfolio.dividend_receivable + sum(
             (item.last_price * item.quantity for item in positions),
             Decimal(0),
         )
@@ -144,13 +156,15 @@ class PortfolioRepository:
         first_acquired: dict[str, date] = {}
         for lot in lots:
             first_acquired[lot.symbol] = min(first_acquired.get(lot.symbol, lot.acquired_on), lot.acquired_on)
-            if lot.acquired_on < state_date:
+            if lot.acquired_on < state_date and (lot.available_on is None or lot.available_on <= state_date):
                 lot_quantities[lot.symbol] = lot_quantities.get(lot.symbol, 0) + lot.remaining_quantity
         position_states = tuple(
             PositionState(
                 symbol=item.symbol,
                 quantity=item.quantity,
                 sellable_quantity=lot_quantities.get(item.symbol, 0),
+                locked_bonus_quantity=sum(lot.remaining_quantity for lot in lots if lot.symbol == item.symbol
+                                          and lot.available_on is not None and lot.available_on > state_date),
                 average_cost=item.average_cost,
                 total_cost=item.total_cost,
                 last_price=item.last_price,
@@ -173,6 +187,8 @@ class PortfolioRepository:
             cash_balance=portfolio.cash_balance,
             frozen_cash=portfolio.frozen_cash,
             realized_pnl=portfolio.realized_pnl,
+            dividend_receivable=portfolio.dividend_receivable,
+            dividend_income=portfolio.dividend_income,
             positions=position_states,
             version=portfolio.version,
         )
@@ -213,10 +229,10 @@ class PortfolioRepository:
                     market_value=sum(
                         (item.last_price * item.quantity for item in state.positions), Decimal(0)
                     ),
-                    total_equity=state.cash_balance + sum(
-                        (item.last_price * item.quantity for item in state.positions), Decimal(0)
-                    ),
+                    total_equity=state.total_equity,
                     realized_pnl=state.realized_pnl,
+                    dividend_receivable=state.dividend_receivable,
+                    dividend_income=state.dividend_income,
                     unrealized_pnl=sum((item.unrealized_pnl for item in state.positions), Decimal(0)),
                     content_hash=hashlib.sha256(decision_payload.encode("utf-8")).hexdigest(),
                     details_json=decision_details,
@@ -264,6 +280,235 @@ class PortfolioRepository:
                 orders=stored_orders,
             )
 
+    async def save_c_group_signal_batch(
+        self,
+        sizing_run: PositionSizingRunV1,
+        sizing_config: PositionSizingConfigV1,
+        batch: ValidatedSignalBatch,
+        decision_portfolio: PortfolioState,
+    ) -> StoredSignalBatch:
+        if (
+            sizing_run.config_hash != sizing_config.config_hash
+            or sizing_run.portfolio_id != batch.batch.portfolio_id
+            or sizing_run.portfolio_id != decision_portfolio.portfolio_id
+            or sizing_run.portfolio_version != decision_portfolio.version
+            or sizing_run.decision_date != batch.batch.decision_date
+            or sizing_run.planned_execution_date
+            != batch.batch.planned_execution_date
+            or tuple(item.symbol for item in sizing_run.targets)
+            != batch.batch.candidate_symbols
+        ):
+            raise PortfolioTransactionError("C_GROUP_PERSISTENCE_IDENTITY_MISMATCH")
+        try:
+            async with self._session_factory.begin() as session:
+                existing_run = await session.scalar(
+                    select(PositionSizingRunRecord).where(
+                        PositionSizingRunRecord.run_id == sizing_run.run_id
+                    )
+                )
+                if existing_run is not None:
+                    if (
+                        existing_run.input_hash != sizing_run.input_hash
+                        or existing_run.target_batch_hash
+                        != sizing_run.target_batch_hash
+                        or existing_run.signal_batch_id is None
+                    ):
+                        raise PortfolioTransactionError(
+                            "C_GROUP_IDEMPOTENCY_CONFLICT"
+                        )
+                    signal_record = await session.get(
+                        SignalBatchRecord, existing_run.signal_batch_id
+                    )
+                    if signal_record is None:
+                        raise PortfolioTransactionError(
+                            "C_GROUP_SIGNAL_BATCH_NOT_FOUND"
+                        )
+                    return await self._stored_batch(session, signal_record)
+
+                portfolio_record = await session.get(
+                    PortfolioRecord, sizing_run.portfolio_id
+                )
+                if portfolio_record is None:
+                    raise PortfolioNotFound(sizing_run.portfolio_id)
+                if portfolio_record.version != sizing_run.portfolio_version:
+                    raise PortfolioVersionConflict("PORTFOLIO_VERSION_CONFLICT")
+
+                policy = ExecutionPolicy()
+                drafts = build_order_drafts(
+                    batch,
+                    decision_portfolio,
+                    policy,
+                    batch.batch.planned_execution_date,
+                )
+                now = datetime.now(UTC)
+                batch_id = _stable_id("batch", batch.input_hash)
+                decision_snapshot_id = _stable_id(
+                    "snapshot", f"decision:{batch.input_hash}"
+                )
+                decision_details = decision_portfolio.model_dump(mode="json")
+                decision_payload = json.dumps(
+                    decision_details,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                decision_portfolio_hash = hashlib.sha256(
+                    decision_payload.encode("utf-8")
+                ).hexdigest()
+                existing_batch = await session.get(SignalBatchRecord, batch_id)
+                if existing_batch is not None:
+                    if existing_batch.input_hash != batch.input_hash:
+                        raise PortfolioTransactionError(
+                            "C_GROUP_SIGNAL_CONTENT_CONFLICT"
+                        )
+                    self._add_c_group_sizing_records(
+                        session=session,
+                        sizing_run=sizing_run,
+                        sizing_config=sizing_config,
+                        decision_portfolio_hash=decision_portfolio_hash,
+                        batch_id=batch_id,
+                        now=now,
+                    )
+                    await session.flush()
+                    return await self._stored_batch(session, existing_batch)
+                market_value = sum(
+                    (
+                        item.last_price * item.quantity
+                        for item in decision_portfolio.positions
+                    ),
+                    Decimal(0),
+                )
+                session.add(
+                    PortfolioSnapshotRecord(
+                        id=decision_snapshot_id,
+                        portfolio_id=sizing_run.portfolio_id,
+                        snapshot_type="DECISION_INPUT",
+                        as_of=datetime.combine(
+                            sizing_run.decision_date, time.min, tzinfo=UTC
+                        ),
+                        cash_balance=decision_portfolio.cash_balance,
+                        frozen_cash=decision_portfolio.frozen_cash,
+                        market_value=market_value,
+                        total_equity=decision_portfolio.total_equity,
+                        realized_pnl=decision_portfolio.realized_pnl,
+                        dividend_receivable=decision_portfolio.dividend_receivable,
+                        dividend_income=decision_portfolio.dividend_income,
+                        unrealized_pnl=sum(
+                            (
+                                item.unrealized_pnl
+                                for item in decision_portfolio.positions
+                            ),
+                            Decimal(0),
+                        ),
+                        content_hash=decision_portfolio_hash,
+                        details_json=decision_details,
+                    )
+                )
+                session.add(
+                    SignalBatchRecord(
+                        id=batch_id,
+                        portfolio_id=sizing_run.portfolio_id,
+                        decision_date=sizing_run.decision_date,
+                        fixture_version=batch.batch.fixture_version,
+                        cash_target_pct=batch.batch.cash_target_pct,
+                        status=batch.status.value,
+                        input_hash=batch.input_hash,
+                        decision_snapshot_id=decision_snapshot_id,
+                        created_at=now,
+                    )
+                )
+                signal_ids: dict[str, str] = {}
+                for signal in batch.batch.signals:
+                    signal_id = _stable_id("signal", f"{batch_id}:{signal.symbol}")
+                    signal_ids[signal.symbol] = signal_id
+                    session.add(
+                        SignalRecord(
+                            id=signal_id,
+                            batch_id=batch_id,
+                            symbol=signal.symbol,
+                            action=signal.action.value,
+                            target_position_pct=signal.target_position_pct,
+                            confidence=signal.confidence,
+                            thesis=signal.thesis,
+                            invalidation=signal.invalidation,
+                            created_at=now,
+                        )
+                    )
+                stored_orders = tuple(
+                    StoredOrder(signal_id=signal_ids[draft.symbol], **draft.model_dump())
+                    for draft in drafts
+                )
+                for order in stored_orders:
+                    session.add(_order_record(order, sizing_run.portfolio_id, now))
+
+                self._add_c_group_sizing_records(
+                    session=session,
+                    sizing_run=sizing_run,
+                    sizing_config=sizing_config,
+                    decision_portfolio_hash=decision_portfolio_hash,
+                    batch_id=batch_id,
+                    now=now,
+                )
+                await session.flush()
+                return StoredSignalBatch(
+                    batch_id=batch_id,
+                    input_hash=batch.input_hash,
+                    orders=stored_orders,
+                )
+        except IntegrityError as exc:
+            raise PortfolioTransactionError("C_GROUP_ATOMIC_WRITE_FAILED") from exc
+
+    @staticmethod
+    def _add_c_group_sizing_records(
+        *,
+        session: AsyncSession,
+        sizing_run: PositionSizingRunV1,
+        sizing_config: PositionSizingConfigV1,
+        decision_portfolio_hash: str,
+        batch_id: str,
+        now: datetime,
+    ) -> None:
+        sizing_run_id = _stable_id("sizing", sizing_run.run_id)
+        session.add(
+            PositionSizingRunRecord(
+                id=sizing_run_id,
+                run_id=sizing_run.run_id,
+                portfolio_id=sizing_run.portfolio_id,
+                portfolio_version=sizing_run.portfolio_version,
+                decision_date=sizing_run.decision_date,
+                planned_execution_date=sizing_run.planned_execution_date,
+                sizing_version=sizing_run.sizing_version,
+                config_json=sizing_config.model_dump(mode="json"),
+                config_hash=sizing_run.config_hash,
+                input_hash=sizing_run.input_hash,
+                decision_portfolio_hash=decision_portfolio_hash,
+                target_batch_hash=sizing_run.target_batch_hash,
+                gross_target_pct=sizing_run.gross_target_pct,
+                cash_target_pct=sizing_run.cash_target_pct,
+                run_code=sizing_run.run_code,
+                signal_batch_id=batch_id,
+                created_at=now,
+            )
+        )
+        for target in sizing_run.targets:
+            session.add(
+                PositionTargetRecord(
+                    id=_stable_id(
+                        "sizing-target", f"{sizing_run_id}:{target.symbol}"
+                    ),
+                    sizing_run_id=sizing_run_id,
+                    decision_evaluation_id=target.decision_evaluation_id,
+                    symbol=target.symbol,
+                    requested_action=target.requested_action.value,
+                    sizing_status=target.status.value,
+                    current_position_pct=target.current_position_pct,
+                    raw_target_position_pct=target.raw_target_position_pct,
+                    target_position_pct=target.target_position_pct,
+                    signal_action=target.signal_action.value,
+                    block_code=target.block_code,
+                )
+            )
+
     async def find_signal_batch(self, batch: FixtureSignalBatch) -> StoredSignalBatch | None:
         async with self._session_factory() as session:
             record = await session.scalar(
@@ -298,7 +543,42 @@ class PortfolioRepository:
             )
         return tuple(_stored_order(item) for item in records)
 
+    async def load_pending_orders_through(
+        self,
+        portfolio_id: str,
+        trade_date: date,
+    ) -> tuple[StoredOrder, ...]:
+        async with self._session_factory() as session:
+            records = tuple((await session.scalars(
+                select(VirtualOrderRecord)
+                .where(
+                    VirtualOrderRecord.portfolio_id == portfolio_id,
+                    VirtualOrderRecord.planned_execution_date <= trade_date,
+                    VirtualOrderRecord.status == VirtualOrderStatus.PENDING_NEXT_OPEN.value,
+                )
+                .order_by(VirtualOrderRecord.id)
+            )).all())
+        return tuple(_stored_order(item) for item in records)
+
+    async def execute_cash_only_date(self, command: ExecuteCashOnlyDate) -> ExecutionBatchResult:
+        if command.execution_input_hash is None:
+            raise ValueError("CASH_ONLY_INPUT_HASH_REQUIRED")
+        command.calendar_proof.verify(command.trade_date)
+        if command.trade_date < command.start_date:
+            raise ValueError("CASH_ONLY_BEFORE_START")
+        if command.market_snapshots:
+            raise ValueError("CASH_ONLY_NONEMPTY_INPUT")
+        return await self.execute_trade_date(command)
+
     async def execute_trade_date(self, command: ExecuteTradeDate) -> ExecutionBatchResult:
+        if command.corporate_actions is not None:
+            command.corporate_actions.verify(command.trade_date)
+            if command.execution_input_hash is None:
+                command = command.model_copy(update={"execution_input_hash": sha256_json({
+                    "trade_date": command.trade_date.isoformat(),
+                    "market_snapshots": {symbol: snapshot.model_dump(mode="json") for symbol, snapshot in command.market_snapshots.items()},
+                    "corporate_actions": command.corporate_actions.model_dump(mode="json"),
+                })})
         try:
             async with self._session_factory.begin() as session:
                 existing_portfolio = await session.get(PortfolioRecord, command.portfolio_id)
@@ -337,16 +617,70 @@ class PortfolioRepository:
                     portfolio.version = command.expected_version
                     return await self._existing_execution(session, command, order_records)
 
+                if isinstance(command, ExecuteCashOnlyDate):
+                    command.calendar_proof.verify(command.trade_date)
+                    if command.execution_input_hash is None:
+                        raise ValueError("CASH_ONLY_INPUT_HASH_REQUIRED")
+                    if command.trade_date < command.start_date:
+                        raise ValueError("CASH_ONLY_BEFORE_START")
+                    if command.market_snapshots:
+                        raise ValueError("CASH_ONLY_NONEMPTY_INPUT")
+                    held = await session.scalar(select(PositionRecord.id).where(
+                        PositionRecord.portfolio_id == command.portfolio_id,
+                        PositionRecord.quantity > 0,
+                    ).limit(1))
+                    lot = await session.scalar(select(PositionLotRecord.id).where(
+                        PositionLotRecord.portfolio_id == command.portfolio_id,
+                        PositionLotRecord.remaining_quantity > 0,
+                    ).limit(1))
+                    outstanding = await CorporateActionRepository().has_outstanding_entitlements(session, command.portfolio_id)
+                    if held is not None or lot is not None or order_records or outstanding or portfolio.dividend_receivable:
+                        raise ValueError("CASH_ONLY_PORTFOLIO_NOT_EMPTY")
+                    previous = await session.scalar(select(NavRecord.valuation_date).where(
+                        NavRecord.portfolio_id == command.portfolio_id,
+                    ).order_by(NavRecord.valuation_date.desc()).limit(1))
+                    if previous is None:
+                        if command.trade_date != command.start_date:
+                            raise ValueError("DAILY_EXECUTION_HISTORY_GAP")
+                    elif previous != command.calendar_proof.previous_trade_date:
+                        raise ValueError("DAILY_EXECUTION_HISTORY_GAP")
+
                 ledger = await self._ledger(session, portfolio)
+                corporate_repository = CorporateActionRepository()
+                affected: set[str] = set()
+                outstanding_symbols = await corporate_repository.required_symbols(session, command.portfolio_id)
+                if command.corporate_actions is not None:
+                    actions = command.corporate_actions
+                    actions.verify(command.trade_date)
+                    required_actions = outstanding_symbols | {item.symbol for item in ledger.positions if item.quantity > 0} | {item.symbol for item in order_records}
+                    if not required_actions.issubset(actions.requested_symbols):
+                        raise ValueError("CORPORATE_ACTION_COVERAGE_INCOMPLETE")
+                    affected = await corporate_repository.validate_daily_events(
+                        session, command.portfolio_id, command.trade_date, actions.events,
+                    )
+                    await corporate_repository.apply_due_stages(session, command.portfolio_id, command.trade_date, ledger)
+                elif outstanding_symbols:
+                    raise ValueError("CORPORATE_ACTION_MANIFEST_REQUIRED")
+                expired = tuple(_stored_order(item).model_copy(update={
+                    "status": VirtualOrderStatus.EXPIRED, "code": "CORPORATE_ACTION_ORDER_EXPIRED",
+                }) for item in order_records if item.symbol in affected)
                 result = execute_order_batch(
                     ledger,
-                    tuple(_stored_order(item) for item in order_records),
+                    tuple(_stored_order(item) for item in order_records if item.symbol not in affected),
                     command.market_snapshots,
                     command.trade_date,
                 )
+                if expired:
+                    result = result.model_copy(update={"orders": result.orders + expired})
+                if command.corporate_actions is not None:
+                    for event in command.corporate_actions.events:
+                        if event.record_date == command.trade_date:
+                            await corporate_repository.freeze_record_date(session, command.portfolio_id, event, ledger)
                 portfolio.cash_balance = ledger.cash_balance
                 portfolio.frozen_cash = ledger.frozen_cash
                 portfolio.realized_pnl = ledger.realized_pnl
+                portfolio.dividend_receivable = ledger.dividend_receivable
+                portfolio.dividend_income = ledger.dividend_income
                 await self._replace_positions(session, command.portfolio_id, ledger, result)
                 order_by_id = {item.id: item for item in order_records}
                 for order in result.orders:
@@ -359,7 +693,12 @@ class PortfolioRepository:
                     record.updated_at = datetime.now(UTC)
                 for fill in result.fills:
                     session.add(_fill_record(fill))
-                session.add(_snapshot_record(result.snapshot))
+                session.add(_snapshot_record(
+                    result.snapshot,
+                    command.execution_input_hash,
+                    command.execution_source_manifest_id,
+                    command.corporate_actions.content_hash if command.corporate_actions is not None else None,
+                ))
                 session.add(_nav_record(command.portfolio_id, result.nav))
                 await session.flush()
                 return result
@@ -418,6 +757,8 @@ class PortfolioRepository:
             portfolio.cash_balance,
             frozen_cash=portfolio.frozen_cash,
             realized_pnl=portfolio.realized_pnl,
+            dividend_receivable=portfolio.dividend_receivable,
+            dividend_income=portfolio.dividend_income,
         )
         positions = tuple(
             (await session.scalars(
@@ -439,6 +780,7 @@ class PortfolioRepository:
             position.lots.append(
                 PositionLot(
                     acquired_on=lot.acquired_on,
+                    available_on=lot.available_on,
                     remaining_quantity=lot.remaining_quantity,
                     total_cost=lot.total_cost,
                 )
@@ -500,6 +842,7 @@ class PortfolioRepository:
                         position_id=position_id,
                         symbol=position.symbol,
                         acquired_on=lot.acquired_on,
+                        available_on=lot.available_on,
                         remaining_quantity=lot.remaining_quantity,
                         unit_cost=lot.unit_cost,
                         total_cost=lot.total_cost,
@@ -531,6 +874,16 @@ class PortfolioRepository:
         )
         if snapshot is None or nav is None:
             raise PortfolioTransactionError("EXECUTION_RESULT_NOT_FOUND")
+        if command.execution_input_hash is not None and (
+            snapshot.details_json is None
+            or snapshot.details_json.get("execution_input_hash") != command.execution_input_hash
+            or snapshot.details_json.get("execution_source_manifest_id")
+            != command.execution_source_manifest_id
+        ):
+            raise PortfolioTransactionError("EXECUTION_INPUT_CONFLICT")
+        expected_actions = command.corporate_actions.content_hash if command.corporate_actions is not None else None
+        if (snapshot.details_json or {}).get("corporate_action_hash") != expected_actions:
+            raise PortfolioTransactionError("EXECUTION_INPUT_CONFLICT")
         return ExecutionBatchResult(
             orders=tuple(_stored_order(item) for item in orders),
             fills=(),
@@ -544,7 +897,12 @@ def _stable_id(prefix: str, value: str) -> str:
     return f"{prefix}-{digest}"
 
 
-def _snapshot_record(snapshot: PortfolioSnapshot) -> PortfolioSnapshotRecord:
+def _snapshot_record(
+    snapshot: PortfolioSnapshot,
+    execution_input_hash: str | None = None,
+    execution_source_manifest_id: str | None = None,
+    corporate_action_hash: str | None = None,
+) -> PortfolioSnapshotRecord:
     return PortfolioSnapshotRecord(
         id=_stable_id(
             "snapshot",
@@ -558,9 +916,18 @@ def _snapshot_record(snapshot: PortfolioSnapshot) -> PortfolioSnapshotRecord:
         market_value=snapshot.market_value,
         total_equity=snapshot.total_equity,
         realized_pnl=snapshot.realized_pnl,
+        dividend_receivable=snapshot.dividend_receivable,
+        dividend_income=snapshot.dividend_income,
         unrealized_pnl=snapshot.unrealized_pnl,
         content_hash=snapshot.content_hash,
-        details_json=None,
+        details_json=(
+            {
+                "execution_input_hash": execution_input_hash,
+                "execution_source_manifest_id": execution_source_manifest_id,
+                **({"corporate_action_hash": corporate_action_hash} if corporate_action_hash is not None else {}),
+            }
+            if execution_input_hash is not None else None
+        ),
     )
 
 
@@ -647,6 +1014,8 @@ def _nav_state(
         market_value=snapshot.market_value if snapshot is not None else record.total_equity,
         total_equity=record.total_equity,
         realized_pnl=snapshot.realized_pnl if snapshot is not None else Decimal(0),
+        dividend_receivable=snapshot.dividend_receivable if snapshot is not None else Decimal(0),
+        dividend_income=snapshot.dividend_income if snapshot is not None else Decimal(0),
         unrealized_pnl=snapshot.unrealized_pnl if snapshot is not None else Decimal(0),
         unit_nav=record.unit_nav,
         daily_return=record.daily_return,
@@ -665,6 +1034,8 @@ def _portfolio_snapshot(record: PortfolioSnapshotRecord) -> PortfolioSnapshot:
         market_value=record.market_value,
         total_equity=record.total_equity,
         realized_pnl=record.realized_pnl,
+        dividend_receivable=record.dividend_receivable,
+        dividend_income=record.dividend_income,
         unrealized_pnl=record.unrealized_pnl,
         content_hash=record.content_hash,
     )

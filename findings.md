@@ -1,5 +1,18 @@
 # AI Signal Lab 调研与决策记录
 
+## 2026-09-27 最新研究接线验收
+
+- 沙耶实现实际位于 SAYAboom/fkqt-jevInvestor 的 feature/backtest-engine，最新9ef4fb5；上游没有她的实现PR。已直接保留作者历史合入本地开发分支，未改变GitHub main或关闭其他PR。
+- 联合发现features含潜在持仓与queue∪held目标覆盖不一致；新增可选候选队列Protocol，旧ReplayDay及冻结hash不变。四组两日、FIFO、历史持仓与冻结重放通过。
+- 独立审查4 Important：日期断链、重复目标、执行结果身份/账目、重复arm覆盖。9项失败用例修复通过；窗口外日期专用用例也通过。成功测试假件修正身份和日历链，故障测试继续使用原始返回值。
+- 最终一次受影响回归160/160通过，Ruff/Pyright零错误；合成两日返回仅验证接线，不证明Jev真实收益。
+
+- 已完成 R65–R69，本轮只读导出及 A 组目标/冻结重放的真实 CLI 命令通过，源库 SHA256 前后一致。
+- 独立审查发现4项重要问题：历史配置/持仓分支混入、缺证券状态仍发布、持有日少算当前日、比较只看仓位版本；分别补测试并修复。配置和历史链严格隔离，歧义/回填拒绝，持有天数包括当前执行日，比较必需实际审计参数。
+- 一次受影响回归91/91通过；Ruff全通过，Pyright 0 errors/0 warnings。保留用户未跟踪缓存，未修改沙耶目录或旧契约。
+- 不把测试目标、合成行情和比较差值当作真实收益证据；尚未消耗API额度，尚未联合回测引擎或启动持续前向。旧回测接口遇到公司行为仍拒绝，前向V2权益能力不受影响。
+- 完整命令、33份交付文件绝对路径与限制见 docs/validation/2026-09-27-research-bridge.md。
+
 日期：2026-09-21
 
 ## 已核实事实
@@ -26,6 +39,13 @@
 10. 正式接收的 FKQT 数据必须冻结到新系统，离线回放不得要求 FKQT 在线。
 11. 已验收的 Phase 0/1 代码迁入新仓库，不重新实现。
 12. 新系统不复用现有 `LlmOverlayShadowService`。
+13. Phase 3 不再让 Jev 输出因子占比；Jev 改为输出候选池风险，以及个股下一交易日盈亏、未来 5 个交易日盈亏、最大不利波动、盈亏不对称性和数据充分度的有限标签概率。
+14. Jev 输出属于待校准预测；实际盈亏、最大不利波动和盈亏不对称标签由代码从 D+1 后冻结行情生成，不能进入 D 日正式输入。
+15. 候选池状态按正式运行复用一次，个股状态按证券独立评估；持仓状态留给 Phase 4 LLM，不进入 Jev 输入。
+16. 第一版彻底删除动态因子权重、权重 Profile 和概率到权重映射，Jev 和 LLM 均不生成连续权重。
+17. 前向测试候选容量由每次运行的 `candidate_limit` 显式配置，不设产品级固定默认值；合格数量不足时不以不合格股票补齐。
+18. C 组“确定性特征 → Jev 盈亏概率 → LLM 离散动作 → 确定性仓位”是第一版主链和最高优先级；A/B/D 仅用于消融和基线比较。
+19. `run_id` 不进入 Jev State、输入哈希或正式结果键；相同冻结输入、Provider、模型和问题版本可跨运行复用，数据库使用独立 RunLink 保留每次正式运行的审计关系。
 
 ## 独立仓库架构修订（2026-09-21）
 
@@ -117,3 +137,163 @@
 - Pytest：`79 passed, 1 deselected, 2 warnings`；live 测试未运行。
 - Alembic：`upgrade head → downgrade base → upgrade head` 完成，最终为 `0003_phase1_audit_snapshot (head)`。
 - 两日 Fixture：现金 `795834.7700`，总资产 `999834.7700`，卖出佣金 `1.2000`，印花税 `2.0000`，买入佣金 `60.0300`，持仓数量 `400/20000`，重复成交 `0`。
+
+## Phase 2 行情快照与确定性特征（2026-09-21）
+
+1. FKQT 已被隔离为外部数据上游；正式链路只通过不可变 Manifest bundle 或版本化 REST 响应读取数据。
+2. Manifest Adapter 验证六类数据的版本、日期、内容哈希、物理 Schema 哈希、行数和路径边界；新增的 `candidate_universe` 是候选池成员和版本的权威来源。读取分区目录单文件时必须设置 `partitioning=None`，避免 PyArrow 自动注入 Hive 分区列。
+3. REST Adapter 使用启动层配置的 `httpx.AsyncClient`，业务模块不保存 Base URL、认证凭据或 Client 生命周期。
+4. 行情快照保存为 `<snapshot-root>/<decision-date>/<content-hash>.json`；数据库只保存引用、审计元数据和逐项版本化特征。
+5. 单票行情特征全部使用 Decimal，并统一量化到 8 位；复权模式混合时价格特征稳定缺失为 `ADJUSTMENT_MODE_MISMATCH`。
+6. 横截面百分位采用平均秩，单个有效值为 `0.50000000`，无有效值为 `CROSS_SECTION_EMPTY`，输入顺序不影响结果。
+7. Pipeline 固定执行 Provider 获取、全量 Point-in-Time 校验、文件冻结、单票特征、横截面和数据库事务保存；未来 bar 会在数据库写入前拒绝整批。
+8. CLI 命令为 `market freeze --date YYYY-MM-DD --symbols A,B --source manifest`；bundle 和快照根目录只从环境配置读取，不接受请求传入任意路径。
+9. HTTP 提供 freeze、快照引用查询和特征查询；production 请求 Schema 禁止额外本地路径字段。未注入 Provider 时 freeze 返回 `MARKET_PROVIDER_UNAVAILABLE`，历史查询不受影响。
+10. 严格类型检查使用 `pyarrow-stubs==20.0.0.20260819`；未来升级 PyArrow 时需要同步复核类型桩。
+11. Phase 2 完整验收首次运行：Ruff `All checks passed!`，Pyright `0 errors, 0 warnings`，Pytest `100 passed, 2 failed, 1 deselected`。两个失败来自旧测试把 Alembic `head` 写死为 `0003` 和 11 张表；Phase 2 当前正确值是 `0004` 和 13 张表。修正后按测试节制要求只重跑两个失败项，结果 `2 passed`。
+12. 初次验收时 Alembic 为 `0004_phase2_market_features`；审查修复新增独立 Revision `0005_phase2_audit_hardening`，不改写已推送迁移历史。
+13. 非阻断警告共 2 条：Starlette TestClient 使用 AnyIO 旧别名；FastAPI 的 `HTTP_422_UNPROCESSABLE_ENTITY` 常量已弃用。两者均来自第三方调用链。
+14. 初次验收时 Contract 文件相对提交 `057e0c6` 无漂移；独立审查随后发现 `ReplayDay` 会把 D+1 执行行情暴露给 `TargetProvider`。标签尚未发布，因此已在候选 v1 内新增 `DecisionReplayDay` 并同步 Contributor 契约，修复提交合并后才能发布标签。
+15. 独立整分支审查发现 1 个 Critical、10 个 Important 和 2 个 Minor。Critical/Important 已进入一次集中修复：日频 cutoff 必须达到中国市场 15:00 且带时区；数据库统一写入 UTC；原特征快照哈希持久化；缺行情和陈旧行情输出稳定缺失；补齐 4 个设计特征；固定 Decimal precision/rounding；Manifest 强制冻结候选池和来源审计；交易日历必须逐日完整；TargetProvider 无法访问 D+1 行情。
+16. 审查修复直接相关测试分三组运行：单元 15 passed、Adapter Contract 10 passed、Phase 2 集成 10 passed；Ruff 全量通过，Pyright 0 errors/0 warnings。
+17. 两个 Minor 延后：Pydantic frozen 模型内部 Mapping 仍可变；快照文件尚未采用临时文件加原子发布。两项不会绕过当前哈希校验，但应在下一次存储加固任务处理。
+
+## Phase 3 Jev 行情盈亏概率（2026-09-21）
+
+1. Phase 3 使用 `JevUniverseStateV1` 与 `JevSymbolStateV1` 两层状态；候选池状态不包含单票历史或账户数据，个股状态不包含 `HELD_ONLY` 标记。
+2. 候选容量由每次运行的 `candidate_limit` 显式给出；队列外持仓参与个股评估但不计容量，也不进入候选池横截面聚合。
+3. Jev 只回答候选池风险与个股 1 日盈亏、5 日盈亏、5 日回撤、5 日盈亏不对称和数据充分度的 Choice 概率，不再实现因子权重。
+4. 未来真实标签由 Decimal 代码从 D+1 开盘和 D+1 至 D+5 冻结行情计算；D+1 成交量或成交额为 0 被视为不可成交，返回 `LABEL_UNAVAILABLE`。
+5. TypeSafe 新 Provider 与旧新闻语义 Provider 隔离；契约错误只保存清理后响应哈希，外部异常只公开异常类型。
+6. `formal_key` 跨运行复用正式结果，`run_id` 通过独立 RunLink 审计；成功缓存命中不新增 Attempt，失败重试序号递增。
+7. Phase 3 新增数据库 Revision `0006_phase3_jev_pnl_probabilities` 和四张表：Evaluation、Attempt、QuestionResult、RunLink。
+8. C 组编排按候选池一次、证券排序逐一评估；必要特征缺失、Provider 不可用和响应契约无效都保存无概率失败结果，不退化到其他实验组。
+9. 新 Live Contract Probe 使用合成状态，并由 `RUN_LIVE_JEV_TESTS=1` 与 `TYPESAFE_API_KEY` 双门控；默认离线执行不访问外部服务。
+10. Phase 3 首次完整离线验收为 `192 passed, 1 failed, 2 deselected`；唯一失败是旧迁移链测试仍把 Alembic head 和业务表数量固定为 Phase 2 的 `0005/13`。
+11. 旧迁移断言更新为 Phase 3 的 `0006/17` 后，只重跑该失败项得到 `1 passed`；有效离线结果为 193 项通过、0 项有效失败、2 个 live 测试未执行。
+12. Ruff 首次发现 21 个 Phase 3 风格问题，19 个由安全机械修复完成，2 个手工修正为 `pairwise` 和明确 `IntegrityError`；重跑结果为 `All checks passed!`。
+13. Pyright 在隔离 worktree 中必须显式使用父工作区解释器；最终结果为 `0 errors, 0 warnings, 0 informations`。
+14. Alembic 独立临时 SQLite 完成 `upgrade head → downgrade 0005 → upgrade head`，最终为 `0006_phase3_jev_pnl_probabilities (head)`。
+15. Secret 扫描未发现实际凭据；命中项仅为空 `.env.example`、扫描正则文本和运行手册中的密码管理器占位符。
+16. 旧语义 Provider、新行情 Provider和回测契约兼容测试为 `20 passed`；静态修正涉及的标签、Repository 和编排定点回归为 `37 passed`。
+17. 独立 Phase 3 审查发现费用版本、问题集完整性、State 白名单、Jev 边界 Point-in-Time、真实标签交易日/可成交性、空候选池、Claim lease 和失败延迟审计问题；全部映射到 R15/R16/R22/R39/R40/R42 并进入阻断修复。
+18. `pnl-label-criteria-v1` 现在固定 `round-trip-cost-v1 = 0.00100000`，标签实体保存成本、成本版本、行情哈希和交易日历哈希；D+1 至 D+5 必须匹配冻结交易日历，D+1 必须通过停牌与一字涨跌停可成交校验。
+19. `AVAILABLE` 结果按 scope 强制完整问题集和冻结问题契约；Jev State 使用字段白名单，Provider 在外部调用前重新验证 State。
+20. Jev Builder 在独立入口再次校验决策截止、来源审计、日线日期和证券状态日期；空候选池或必要聚合缺失记录 `DATA_UNAVAILABLE`，不调用 Provider。
+21. Attempt 增加 lease 与 owner token；过期后新 owner 使用递增序号接管，旧 owner 无法提交。Provider 失败保存真实开始、结束和延迟，不再固定为 0。
+22. 独立审查修复后的 Phase 3 定向回归为 `98 passed`；回测契约另行定点回归为 `2 passed`。
+23. 审查修复后 Ruff 为 `All checks passed!`，Pyright 为 `0 errors, 0 warnings, 0 informations`，Alembic 临时库再次完成 `0006 → 0005 → 0006` 并停在 `0006_phase3_jev_pnl_probabilities (head)`。
+24. TypeSafe SDK 依赖从宽泛的 `<1` 收紧为已验证的 `typesafe-sdk==0.7.0`，并新增真实 `SystemOneResponse`/`ChoiceAnswer` 离线契约测试。
+25. 第二轮独立审查指出 State 只限制“不得多字段”但未限制“不得少字段”；现已要求 Universe metrics/coverage 与 Symbol security 字段全集完整，并要求缺失特征与 `missing_reasons` 一一对应，特征计数与实际字段数一致。
+26. Evaluation 主记录现保存当前 owner token 和租约截止时间；过期接管、成功提交和失败提交都使用数据库条件 `UPDATE` 作为 CAS 裁决。两个 worker 并发抢占时只有一个获得新 Attempt，租约已过期的旧 owner 无法同时写入终态。
+27. 第二轮修复定点验证：State/Provider/Repository 受影响测试 44 项通过；Repository、C 组 Service 与 Phase 3 迁移回归 19 项通过；新增过期租约并发测试 3 项通过。Ruff 全通过，Pyright 0 errors/0 warnings。
+28. 最终复核补充发现 Universe coverage 可能字段齐全但数值矛盾；现已要求计数非负、计数和等于候选实际数量、覆盖率处于 0—1 且与计数一致、缺失数量与缺失原因相互一致，空候选池只能使用 `coverage_ratio=None`。相关 State/Builder/Provider/Service 定点回归 57 项通过。
+
+## Phase 4 LLM 离散动作与确定性仓位设计（2026-09-21）
+
+1. 用户确认首个真实决策 LLM Provider 使用 DeepSeek；业务边界保持 OpenAI-compatible，Provider Base URL 与模型可替换。
+2. DeepSeek 官方 JSON Output 要求请求显式声明 JSON，官方 Responses API 还支持 JSON Schema；本系统仍以本地 Pydantic 作为最终业务契约裁决，避免把传输格式合法误当作动作合法。
+3. OpenAI 官方 Python SDK 提供 Pydantic Structured Outputs parsing；第一版直接使用异步兼容 Client，不引入 LangChain、PydanticAI 或 Instructor 的自动 Agent/修复层。
+4. 正式动作逐证券独立调用，模型只输出 `ENTER/KEEP/EXIT/AVOID`；`NO_SIGNAL` 只由系统失败归一化产生。
+5. 仓位版本固定为 `position-sizing-v1`，使用波动率和流动性确定目标，并应用 10% 单票、80% 总仓位与 20% 最低现金约束；决策前已超限时只阻止新增风险，不绕过 LLM 自动清仓。
+6. 2026-09-21 复核官方模型列表确认 `deepseek-chat` 已于 2026-07-24 退役；第一版默认模型必须使用当前有效的 `deepseek-flash`，并保存实际 model ID。
+7. 外部资料：https://api-docs.deepseek.com/guides/json_mode/、https://api-docs.deepseek.com/api/create-response/、https://api-docs.deepseek.com/quick_start/pricing/、https://github.com/openai/openai-python/blob/main/helpers.md。
+8. 用户明确要求优先使用最强的 DeepSeek 4.1 系列能力；Phase 4 因此冻结默认 `deepseek-flash` 与 `reasoning_effort=high`，并保留模型配置和实际调用模型审计字段。
+9. 现有 `ExperimentArm` 的 A/B/C/D 名称与 R26 含义相反；Phase 4 使用纯加法加入规范枚举，保留旧成员供 Contributor 代码读取，新记录只写规范名。
+10. 现有 Phase 1 Signal 表强制要求 `confidence`，但 LLM 不得输出或合成数值置信度；兼容 Adapter 固定写 `Decimal(0)` 表示 `NOT_PROVIDED`，正式 Decision/Sizing 契约不包含该字段。
+11. DeepSeek Responses API 的推理强度字段是 `reasoning={"effort": "high"}`；`reasoning_effort` 仅是配置名，不直接作为请求字段发送。
+12. C 组在调用 LLM 前验证 decision date、cutoff、D+1、候选池 hash、行情 hash 和 Jev 全证券覆盖；Jev 或特征失败会保存正式 `DATA_UNAVAILABLE/NO_SIGNAL`，不会调用备用模型。
+13. Decision 正式键的成功或失败终态均不可变并可跨 `run_id` 复用；只有过期的 `IN_PROGRESS` 租约允许接管。显式模型重评必须改变 Provider/模型配置身份或冻结输入，不能靠更换 `run_id` 覆盖旧历史。
+14. 仓位计算固定为 `position-sizing-v1`，LLM 输出契约没有仓位、数量、价格或置信度字段；现有 Signal 兼容层中的 `confidence=0` 仅表示未提供，正式决策和仓位表不读取它。
+15. C 组冻结回测文件使用 `<root>/<dataset_id>/<decision_date>/<content_hash>.json`，写入采用临时文件加原子替换，加载时重新计算内容哈希并验证数据集、日期、三类输入 hash 和仓位版本。
+16. 单日 CLI 需要显式配置冻结 snapshot hash 和候选证券列表；候选列表不会由 LLM、Jev 或本地排序算法自行构造。缺少冻结输入或 Provider Secret 时，在创建 Client 前以稳定错误退出。
+17. Phase 4 首轮独立审查发现 9 个 Important：Jev 完成时间误判、IN_PROGRESS 落信号、失败重试改写历史、跨 run 唯一键冲突、冻结输入绑定不足、仓位取整越界、SDK 隐式重试、Provider 配置未入正式键、历史日期读取当前持仓。现已全部修复并加入定向测试。
+18. 仓位缩放统一使用 `ROUND_DOWN`；缩放后低于最低开仓权重的 `ENTER` 变为 `BLOCKED/MIN_ENTRY_POSITION_AFTER_SCALING`，总仓位不超过 80%，现金不低于 20%。
+19. 不同 run 但相同正式内容复用同一个内容寻址 SignalBatch、Signal 和 VirtualOrder，同时分别保存 PositionSizingRun 与 PositionTarget 审计记录。
+20. 当前冻结目标 Store 可由 Python 直接使用，但数据库到冻结 Target bundle 的一键导出 CLI 尚未实现，已作为 Phase 5 已知非阻断项记录。
+21. Phase 2 正式快照包含 23 项特征，Jev 只要求其中 20 项；C 组 Gate 必须做必需集合子集检查，并只以必需特征缺值作为 LLM 阻断条件。可选 `gap_fill_pct` 缺失不应拒绝合法输入。
+22. Phase 4 最终独立复核基于 HEAD `7ab7193` 给出 `Ready to merge: Yes`；原 9 个 Important 全部关闭，无剩余阻断项。
+
+## Phase 5 日频运行（2026-09-23）
+
+1. 现有 C 组单日 CLI 使用随机 `run_id`，不能直接作为无人值守的幂等入口；新 `daily close` 将组合、日期、冻结快照、候选池、容量、组合版本与 Provider 配置映射为稳定 UUID。
+2. 现有 Phase 1 执行引擎需要 D+1 开盘价和当日未复权收盘价；因此前向虚拟成交须在 D+1 收盘数据齐备后回放，不能宣称开盘即时执行。
+3. 现有组合执行在重复 NAV 日期返回历史结果，但原本不绑定执行行情输入；Phase 5 把执行包 hash 写入 `POST_EXECUTION` 快照的 `details_json`，同日换包重跑拒绝。
+4. FKQT Manifest 的候选池只列候选证券，而 C 组还要覆盖队列外持仓；Provider 现将候选池成员校验与全量行情证券范围分离，保留候选顺序审计。
+5. 执行原始行情文件先结构校验并生成内容寻址包；`daily execute` 再核对持仓、到期订单、日期、证券身份、开市状态和 hash，并冻结审计副本。
+6. 当前阶段仍依赖外部调度器与可信上游执行日 JSON；没有券商连接、实时开盘下单、内部告警发送或 A/B/D 批量实验。
+7. 独立 Review 修复前完整离线测试为 `287 passed, 3 deselected`；修复后最终为 `289 passed, 3 deselected`。Ruff 全通过，Pyright `0 errors, 0 warnings`，Alembic head 仍为 `0007_phase4_llm_position_sizing`，本阶段未增加数据库迁移。
+8. Secret 扫描无实际 Key 或长 Bearer Token 命中；两条 warning 分别来自 Starlette/AnyIO 和 FastAPI 的第三方弃用提示。
+9. 独立 Review 指出执行时间/日期、缺收盘价、历史重跑覆盖、决策输入变更与状态查询五类阻断或重要问题；修复采用收盘门禁、计划执行日查询、收盘价必填、已执行日先查 NAV、模型调用前比较稳定 run_id，以及决策日/执行日待办数分列。
+10. 复核又发现状态字段按日期跨组合混入快照与订单；最终改为通过本组合该日 `run_id` 关联决策输入、通过本次 `signal_batch_id` 关联虚拟订单。独立审查确认所有报告项关闭；最终离线测试仍为 `289 passed, 3 deselected`，Ruff/Pyright 全通过。
+
+## FKQT → 本项目 Tushare 前向行情桥接（2026-09-23）
+
+1. FKQT 既有三证券 Fixture 不适合动态候选池；新发布器独立接受有序候选与队列外持仓，六类决策数据复用原 Manifest/Parquet 存储契约，候选 rank 进入内容哈希。
+2. 执行行情由 FKQT 的 `get_execution_context` 提供，`daily.amount` 的千元单位须乘 1000 转为 CNY；官方 `stk_limit` 缺权限或缺字段时不能推算涨跌停价。
+3. 本项目只读 FKQT 文件边界，不导入 FKQT 代码或直连 Tushare；`daily prepare-execution` 保留原手工 JSON 入口，同时新增 `--manifest-root`，两者互斥。
+4. 历史手工 `ExecutionBundleV1` 保留原内容哈希；新 FKQT 执行包在同一 V1 契约中把“必须有来源记录”标记及具体 Manifest ID/内容哈希纳入哈希，并另写同目录不可变 `.origin.json`。相同价格内容的两种来源使用不同执行哈希，来源文件丢失或被换成另一组合法 ID/哈希均拒绝。
+5. `daily required-symbols` 从指定日期的组合持仓和截至该日待执行订单导出排序去重的全集；执行时再次根据持久化状态验证覆盖，不依赖发布者声称的集合。
+6. 现有账本不能处理当日公司行为，发布器明确拒绝，不能把拆股、送股或派息误记为纯价格盈亏。停牌缺当日估值、正常交易缺开盘/收盘/成交额/涨跌停价同样拒绝。
+7. FKQT 测试发布器生成的决策与执行 Manifest 已在本项目真实读取，不是手写格式的单仓库模拟。最终完整离线测试 `309 passed, 3 deselected`，FKQT 相关测试 `27 passed`，Ruff/Pyright/Alembic 均通过。
+8. 未验证真实账号权限与 Tushare 当日数据可用时间；外部调度、候选文件来源、现金空仓日空证券执行包和主动告警仍是前向值守前置事项。
+9. 独立审查指出正常交易证券缺 D 日日线仍能发布旧价格，现按停牌记录逐证券验证唯一且完整的 D 日 bar；正常交易缺当日 bar 返回 `DECISION_DAY_BAR_MISSING`，不生成快照。
+10. 六份决策 Manifest 改为同级暂存、逐份回读校验、完整目录整体发布；中途失败无可见半套输入。读取端按 `rank`、Manifest 请求列表与配置逐项核对候选顺序。
+11. 前向决策 Manifest 的 `data_cutoff` 为交易日 15:00 的行情观察截止点，`fetched_at` 独立记录实际抓取时间。两者无法证明 Tushare 后续未修订历史数据，故不能把此文件桥接宣称为严格历史 point-in-time 数据源。
+12. 执行包来源侧文件现在对手工与 FKQT 路径均不可变；新 FKQT 包的哈希绑定来源文件必需标记和具体来源 ID/哈希，加载时缺失或不匹配均拒绝。执行时把 `source_manifest_id` 写入 `POST_EXECUTION` 审计并用于同日幂等冲突判断。旧无来源侧文件的手工包仍可读取。
+13. 本项目契约测试加入 FKQT 发布器 FakeClient 实际生成的固定 Manifest/Parquet 金样本；运行时仍不导入 FKQT 包。
+# 2026-09-26 事项 2–6 设计确认与计划
+
+- 用户已确认 forward-operations-design：新增 R54–R60，税务 GROSS_V1，未支付应收不可用于买入，未知公司行为整日停止。
+- 三份实施计划分开覆盖基础行情 T1–T5、公司行为 T6–T9、运行及 live 验证 T10–T14；待用户审阅执行方式，没有改产品代码。
+- 两个仓库均已有 linked worktree，tracked 修改开始前为空；JEV 主仓库共享 Python 解释器存在，FKQT 专用解释器尚未确定。
+- 当前 daily_execute 要求排期，V1 空字典拒绝；新首日现金路径需显式 start_date，不能只删空包校验。
+- PositionLotRecord 在执行后替换重建，权益不能引用会删除的原 Lot ID，应保存登记 Lot 内容快照。
+- 真实来源历史数据的抓取时间不等于历史可用时间，不能用今天抓取的资料自动宣称严格 Point-in-Time 回测或前向。
+- 来源复用：既有 ExecutionBundleV1、PortfolioLedger、FKQT execution_publisher；官方 Tushare dividend 文档 https://tushare.pro/document/2?doc_id=103；Python subprocess 与 Microsoft Task Scheduler 官方文档见已批准设计。没有增加新框架或 SDK。
+- 当前未读取 Secret 值、未做外部 API 调用、未安装系统任务、未发送 Webhook。接下来先等待实施计划审阅，不将设计批准冒充代码完成。
+
+## 2026-09-26 实施发现
+
+- 共享 JEV 虚拟环境 editable 指向旧主工作树；定点测试必须显式设置本工作树 `src` 为 PYTHONPATH。FKQT 使用 `C:/Users/1/Desktop/FKQT-pro/agent/.venv-codex/Scripts/python.exe`，未安装重复依赖。
+- Windows 默认 pytest 临时目录存在 ACL 故障，使用工作树 `data/test-runs/` 下每次独立目录，不删除用户旧临时目录。
+- 公司行为覆盖事实的抓取时间也须不晚于 cutoff；只有事件披露时间早于 cutoff 不足以证明当时已完整采集。
+- 同取得日的多个 FIFO Lot 不能逐权益分配重复匹配全部持仓成本；按取得日聚合红股数量后一次分摊，手算 20000 成本送 200 股对应红股成本 1818.18181818，新增回归已验证。
+- 公司行为 Repository 不自行 commit，登记、应收、派息和锁定 Lot 与成交/NAV 共用原事务；权益 Lot 保存内容快照，不引用替换删除的数据库 Lot ID。
+- Tushare dividend 单请求达到 2000 行时拒绝覆盖完整性，不假设不存在的分页参数；真实权限探测尚未运行。
+
+## 2026-09-26 真实验证与最终验收更新
+
+- 用户要求批量完成日期保护、诊断、恢复、评估报告。审查现有代码确认普通 run 缺未来/收盘前门禁，永久 FAILED 直接返回，旧 Jev 概率校验异常归通用码；现有标签生成器可复用，避免另造阈值。
+- 本轮设计参考现有 CAS/SQLAlchemy 与官方事务文档、多类 Brier score 官方示例；不新增调度框架或概率校准训练。完整来源与取舍保存在 docs/superpowers/specs/2026-09-26-forward-safety-evaluation-design.md。设计确认前不修改产品或冻结新需求。
+
+- 后续复验 8c12e88255af4a8ca4acadf05c2b8d1c 真 C 链路 SUCCESS：三份 Jev、两份 LLM 均 AVAILABLE；两股 AVOID，零目标、零订单合法。原失败根因未复现，成功不覆盖旧失败或证明模型长期稳定。
+- 上游冻结日历明确2026-09-25休市、9/28开市，pretrade_date为9/24；不凭星期或自然日推断下一成交日。新前向账户已隔离初始化，未来首日尚未执行。
+
+- 最终独立审查发现并修复 3 项 Important：整数红股尾仓 EXIT 的虚假完成、真实网络错误未接重试、V2 外层公司行为绑定篡改绕过。全部裁定及证据保存在 docs/validation/2026-09-26-forward-review.md；未放松模型契约或重跑整套。
+
+- 九项权限/模型合成契约实际 AVAILABLE；DeepSeek 旧 chat 的成功不算版本升级证据，显式 flash 契约通过。官方发布：[V4.1 Flash](https://api-docs.deepseek.com/news/news260910/)。
+- 2026-09-25 daily/stk_limit 合法空响应只证明接口可访问，不能证明当日行情齐备。两证券共同已观察日期为 2026-09-24，只运行 REAL_SOURCE_REPLAY；未做未来连续交易日验证。
+- SQL 查实第一次历史运行个股均 DATA_UNAVAILABLE，唯一必要缺失为 FLOAT_SHARES_UNAVAILABLE。补上 daily_basic.float_share 并保留单位元数据；万股转百股匹配成交量后由原公式算换手百分数，旧 None 字段不改变 canonical hash。[官方字段与权限](https://tushare.pro/document/2?doc_id=32)。
+- 股本完整后的真实单日，UNIVERSE AVAILABLE、两 SYMBOL CONTRACT_INVALID、两 LLM NO_SIGNAL；NAV=1、订单=0。单股另一次只读诊断的五问契约通过，说明真实返回可能变化，不能覆盖原失败记录或保证下一次成功；没有放宽概率/标签校验。
+- VERIFY 原来未拦 DATA_UNAVAILABLE，真实持久决策集成测试 RED→GREEN 修正；数据与 Provider 任一不足均 DEGRADED。
+- Windows Interactive Task 仅登录时运行。安装 -WhatIf 和内存 XML（5 分钟、105 分钟、IgnoreNew）已验证，未调用 Register-ScheduledTask。
+- 首次完整离线 368 passed/2 failed；迁移旧 head 断言及 NAV 新旧 JSON 返回差异已修，定点 3 passed。第三方 2 项弃用 warning 不改变运行结果，不在本范围升级依赖。
+
+## 2026-09-26 R61–R64实现与审查结论
+
+- 采用现有CAS事务、Provider和build_forward_pnl_labels，不另造标签阈值、调度框架或训练；正式serialization排除diagnostic/usage，缓存从Attempt取回旁路审计。
+- 独立审查发现真实FAILED写入input_hash=None，恢复会永远拒绝；Repository保留原hash，真实Runner RED→GREEN，累计次数与授权消费不重置。
+- Jev调用后LLM之前可能崩溃，旧sizing/Decision链接不能代表完整调用分母；新增调用前不可变run-identity.json，旧缺事实明确UNKNOWN，不反向编造归属。
+- 每日QFQ基准可改变，拼接每日单条行情会误造盈亏标签；D5冻结完整窗口统一基准，交易日链仍严格使用冻结日历，成熟真实集成Brier=1.14。
+- EXECUTE已有NAV的恢复必须先核对POST_EXECUTION执行hash和资产及EXECUTION_PREPARE；不依赖恢复后Runner再拒绝来冒充授权安全。
+- 全部实际usage、历史价格身份、CNY与NAV完整时才算扣模型估算费用收益；100资金/100NAV/4费用→-0.04，未知仍null。
+- 本轮受影响103项首跑102通过/1迁移断言失败，失败项修后通过；新边界20项19通过/1缓存审计失败，失败项修后通过；最终29Python文件静态零错误。只一份fresh最终审查，无第二审查席位。
+- 历史验收副本report-copy.db升级0010，原replay.db和未激活forward.db仍0009。future阻断、默认预览和重复报告后副本hash不变。报告UNVERIFIED/PENDING_LABELS，配置证据不一致时不下收益结论。
+# 2026-09-26 研究接线调查
+
+- 已确认现有 linked worktree，分支 feature/forward-operations，起点 a36537e，tracked clean。
+- 复用已有 MarketSnapshotStore、ExecutionBundle、Jev state builder/Provider、position sizing、PortfolioLedger/执行引擎。现有四组仅枚举，C 冻结目标缺导出 CLI。
+- 比较成熟实现：[Backtrader Broker](https://www.backtrader.com/docu/broker/) 与 [VectorBT Portfolio](https://vectorbt.dev/api/portfolio/base/)。本轮不替换引擎：替换会改变冻结成本/成交口径并越过沙耶边界，选择复用本项目已验证的核心规则与官方 SDK。
+- 关键边界：历史目标依赖原持仓；旧 ReplayDay 无公司行为权益/FIFO lots，新增适配必须显式拒绝不支持状态而非伪造权益和成本。
+- 沿用用户“执行中不暂停”“少跑测试、只重测失败项”要求，设计与计划落盘后直接执行，不追加逐阶段确认。

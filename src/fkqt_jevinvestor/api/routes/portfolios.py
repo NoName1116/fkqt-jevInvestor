@@ -228,7 +228,7 @@ def _position_payload(position: PositionState) -> dict[str, object]:
 
 
 def _nav_payload(nav: NavState) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "valuation_date": nav.valuation_date.isoformat(),
         "cash_balance": _money(nav.cash_balance),
         "market_value": _money(nav.market_value),
@@ -240,6 +240,11 @@ def _nav_payload(nav: NavState) -> dict[str, object]:
         "cumulative_return": str(nav.cumulative_return),
         "max_drawdown": str(nav.max_drawdown),
     }
+    if nav.dividend_receivable != 0:
+        payload["dividend_receivable"] = _money(nav.dividend_receivable)
+    if nav.dividend_income != 0:
+        payload["dividend_income"] = _money(nav.dividend_income)
+    return payload
 
 
 def _money(value: Decimal) -> str:
